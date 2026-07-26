@@ -49,6 +49,13 @@ module Rube
 
       DEFAULT_MAX_DEPTH = 256
 
+      ROLE_LENGTH = "byte length"
+      ROLE_ARRAY = "array element"
+      ROLE_HASH = "hash entry"
+      ROLE_IVAR = "instance variable"
+      ROLE_STRUCT = "struct member"
+      ROLE_BIGNUM = "bignum word"
+
       SINK_TAGS = [TAG_USERDEF, TAG_USERMARSHAL, TAG_DATA].freeze
 
       SINK_METHODS = {

@@ -16,5 +16,7 @@ module Rube
     class InvalidLinkError < StreamError; end
 
     class DepthLimitError < StreamError; end
+
+    class MalformedCountError < StreamError; end
   end
 end

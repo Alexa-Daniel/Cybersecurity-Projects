@@ -31,11 +31,19 @@ module Rube
       end
 
       def take(count)
+        raise MalformedCountError, "negative byte count #{count}" if count.negative?
         raise TruncatedStreamError, "wanted #{count} bytes, had #{remaining}" if count > remaining
 
         slice = source.byteslice(@position, count)
         @position += count
         slice
+      end
+
+      def read_count(role)
+        value = read_fixnum
+        raise MalformedCountError, "negative #{role} count #{value}" if value.negative?
+
+        value
       end
 
       def take_byte
@@ -73,7 +81,7 @@ module Rube
       end
 
       def read_counted_bytes
-        take(read_fixnum)
+        take(read_count(ROLE_LENGTH))
       end
 
       def register(node)
@@ -136,7 +144,7 @@ module Rube
 
       def read_bignum(tag)
         negative = take(1) == BIGNUM_SIGN_NEGATIVE
-        magnitude = little_endian(take(read_fixnum * BIGNUM_WORD_BYTES))
+        magnitude = little_endian(take(read_count(ROLE_BIGNUM) * BIGNUM_WORD_BYTES))
         Node.new(type: :bignum, tag: tag, value: negative ? -magnitude : magnitude)
       end
 
@@ -158,13 +166,13 @@ module Rube
 
       def read_array(tag, depth)
         node = register(Node.new(type: :array, tag: tag))
-        read_fixnum.times { node.children << read_value(depth + 1) }
+        read_count(ROLE_ARRAY).times { node.children << read_value(depth + 1) }
         node
       end
 
       def read_hash(tag, depth)
         node = register(Node.new(type: :hash, tag: tag))
-        read_fixnum.times { node.children << read_pair(depth) }
+        read_count(ROLE_HASH).times { node.children << read_pair(depth) }
         node.children << read_value(depth + 1) if tag == TAG_HASH_DEFAULT
         node
       end
@@ -178,8 +186,9 @@ module Rube
 
       def read_ivar(tag, depth)
         inner = read_value(depth)
-        read_fixnum.times do
+        read_count(ROLE_IVAR).times do
           name = read_value(depth + 1)
+          inner.auxiliary << name
           inner.instance_variables_map[name.value] = read_value(depth + 1)
         end
         inner
@@ -187,9 +196,12 @@ module Rube
 
       def read_object(tag, depth)
         node = register(Node.new(type: :object, tag: tag))
-        node.class_name = read_value(depth + 1).value.to_s
-        read_fixnum.times do
+        class_node = read_value(depth + 1)
+        node.class_name = class_node.value.to_s
+        node.auxiliary << class_node
+        read_count(ROLE_IVAR).times do
           name = read_value(depth + 1)
+          node.auxiliary << name
           node.instance_variables_map[name.value] = read_value(depth + 1)
         end
         node
@@ -198,7 +210,7 @@ module Rube
       def read_struct(tag, depth)
         node = register(Node.new(type: :struct, tag: tag))
         node.class_name = read_value(depth + 1).value.to_s
-        read_fixnum.times { node.children << read_pair(depth) }
+        read_count(ROLE_STRUCT).times { node.children << read_pair(depth) }
         node
       end
 

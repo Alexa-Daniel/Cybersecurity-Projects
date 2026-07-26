@@ -4,7 +4,7 @@
 module Rube
   module Marshal
     class Node
-      attr_reader :type, :tag, :children, :instance_variables_map
+      attr_reader :type, :tag, :children, :instance_variables_map, :auxiliary
       attr_accessor :value, :class_name
 
       def initialize(type:, tag: nil, value: nil, class_name: nil)
@@ -14,6 +14,7 @@ module Rube
         @class_name = class_name
         @children = []
         @instance_variables_map = {}
+        @auxiliary = []
       end
 
       def sink?
@@ -34,6 +35,7 @@ module Rube
         yield self
         children.each { |child| child.each(&block) }
         instance_variables_map.each_value { |child| child.each(&block) }
+        auxiliary.each { |child| child.each(&block) }
       end
     end
 
