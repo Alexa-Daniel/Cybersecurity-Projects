@@ -13,6 +13,10 @@ default:
 
 test:
     {{run_ro}} ruby -Ilib -Itest test/marshal/parser_test.rb
+    {{run_ro}} ruby -Ilib -Itest test/scanner_test.rb
+
+scan namespace="":
+    {{run_ro}} ruby -Ilib -e 'require "rube"; ns = "{{namespace}}"; r = Rube::Scanner.new(namespace: ns.empty? ? nil : ns).scan; puts "modules=#{r.scanned_modules} candidates=#{r.candidates.length} gated=#{r.gated.length} reachable=#{r.reachable.length}"; puts; r.reachable.each { |c| puts format("  %-10s %-46s %s", c.gate, c.to_s, c.source_location) }'
 
 control:
     {{run_ro}} ruby -Ilib -Itest test/control_check.rb
