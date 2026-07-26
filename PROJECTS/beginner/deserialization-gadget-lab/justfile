@@ -15,6 +15,7 @@ test:
     {{run_ro}} ruby -Ilib -Itest test/marshal/parser_test.rb
     {{run_ro}} ruby -Ilib -Itest test/scanner_test.rb
     {{run_ro}} ruby -Ilib -Itest test/chains_test.rb
+    {{run_ro}} ruby -Ilib -Itest test/marshal/boundary_detector_test.rb
 
 scan namespace="":
     {{run_ro}} ruby -Ilib -e 'require "rube"; ns = "{{namespace}}"; r = Rube::Scanner.new(namespace: ns.empty? ? nil : ns).scan; puts "modules=#{r.scanned_modules} candidates=#{r.candidates.length} gated=#{r.gated.length} reachable=#{r.reachable.length}"; puts; r.reachable.each { |c| puts format("  %-10s %-46s %s", c.gate, c.to_s, c.source_location) }'
@@ -39,7 +40,10 @@ exploit:
 target:
     @bash scripts/target-gate.sh
 
-gate: check matrix exploit target
+detector:
+    @bash scripts/detector-gate.sh
+
+gate: check matrix exploit detector target
 
 build:
     {{run}} sh -c "gem build --strict rube.gemspec"

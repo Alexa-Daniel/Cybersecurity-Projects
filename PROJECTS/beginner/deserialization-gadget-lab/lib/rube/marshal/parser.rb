@@ -6,9 +6,14 @@ module Rube
     class Parser
       include Constants
 
-      def initialize(source, max_depth: DEFAULT_MAX_DEPTH)
-        @source = source.to_s.dup.force_encoding(Encoding::BINARY)
-        @max_depth = max_depth
+      def initialize(source, max_depth: DEFAULT_MAX_DEPTH, limits: nil)
+        raise InputTypeError, "expected String, got #{source.class}" unless source.is_a?(String)
+
+        @limits = limits
+        @max_depth = limits ? limits.max_depth : max_depth
+        enforce_size(source)
+        @source = source.dup.force_encoding(Encoding::BINARY)
+        @budget = Budget.new(limits || Limits.new.permissive)
         @position = 0
         @symbols = []
         @objects = []
@@ -24,7 +29,14 @@ module Rube
 
       private
 
-      attr_reader :source, :max_depth, :symbols, :objects
+      attr_reader :source, :max_depth, :symbols, :objects, :budget, :limits
+
+      def enforce_size(candidate)
+        return unless limits
+        return if candidate.bytesize <= limits.max_bytes
+
+        raise LimitExceededError, "#{Limits::ROLE_BYTES} #{candidate.bytesize} exceeds #{limits.max_bytes}"
+      end
 
       def remaining
         source.bytesize - @position
@@ -81,10 +93,19 @@ module Rube
       end
 
       def read_counted_bytes
-        take(read_count(ROLE_LENGTH))
+        size = read_count(ROLE_LENGTH)
+        budget.scalar!(size)
+        take(size)
+      end
+
+      def read_entry_count(role)
+        count = read_count(role)
+        budget.entries!(count)
+        count
       end
 
       def register(node)
+        budget.registered!
         objects << node
         node
       end
@@ -92,6 +113,7 @@ module Rube
       def read_value(depth)
         raise DepthLimitError, "exceeded depth #{max_depth}" if depth > max_depth
 
+        budget.node!
         tag = take(1)
 
         case tag
@@ -123,6 +145,7 @@ module Rube
       end
 
       def read_symbol(tag)
+        budget.symbol!
         node = Node.new(type: :symbol, tag: tag, value: read_counted_bytes.to_sym)
         symbols << node.value
         node
@@ -136,6 +159,7 @@ module Rube
       end
 
       def read_object_link(tag)
+        budget.link!
         index = read_fixnum
         raise InvalidLinkError, "object link #{index} of #{objects.length}" unless objects[index] && index >= 0
 
@@ -166,13 +190,13 @@ module Rube
 
       def read_array(tag, depth)
         node = register(Node.new(type: :array, tag: tag))
-        read_count(ROLE_ARRAY).times { node.children << read_value(depth + 1) }
+        read_entry_count(ROLE_ARRAY).times { node.children << read_value(depth + 1) }
         node
       end
 
       def read_hash(tag, depth)
         node = register(Node.new(type: :hash, tag: tag))
-        read_count(ROLE_HASH).times { node.children << read_pair(depth) }
+        read_entry_count(ROLE_HASH).times { node.children << read_pair(depth) }
         node.children << read_value(depth + 1) if tag == TAG_HASH_DEFAULT
         node
       end
@@ -186,7 +210,7 @@ module Rube
 
       def read_ivar(tag, depth)
         inner = read_value(depth)
-        read_count(ROLE_IVAR).times do
+        read_entry_count(ROLE_IVAR).times do
           name = read_value(depth + 1)
           inner.auxiliary << name
           inner.instance_variables_map[name.value] = read_value(depth + 1)
@@ -199,7 +223,7 @@ module Rube
         class_node = read_value(depth + 1)
         node.class_name = class_node.value.to_s
         node.auxiliary << class_node
-        read_count(ROLE_IVAR).times do
+        read_entry_count(ROLE_IVAR).times do
           name = read_value(depth + 1)
           node.auxiliary << name
           node.instance_variables_map[name.value] = read_value(depth + 1)
@@ -210,7 +234,7 @@ module Rube
       def read_struct(tag, depth)
         node = register(Node.new(type: :struct, tag: tag))
         node.class_name = read_value(depth + 1).value.to_s
-        read_count(ROLE_STRUCT).times { node.children << read_pair(depth) }
+        read_entry_count(ROLE_STRUCT).times { node.children << read_pair(depth) }
         node
       end
 
