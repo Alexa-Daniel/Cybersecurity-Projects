@@ -1,6 +1,8 @@
 # ©AngelaMos | 2026
 # erb_def_method.rb
 
+require "erb"
+
 module Rube
   module Chains
     class ErbDefMethod < Base
@@ -47,8 +49,6 @@ module Rube
       end
 
       def generate
-        require "erb"
-
         object = ERB.allocate
         object.instance_variable_set(IVAR_SRC, src)
         object.instance_variable_set(IVAR_FILENAME, DEFAULT_FILENAME)
