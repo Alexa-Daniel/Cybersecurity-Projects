@@ -1,0 +1,45 @@
+# ©AngelaMos | 2026
+# justfile
+
+set shell := ["bash", "-uc"]
+
+image := "ruby:4.0-slim"
+vuln_image := "ruby:4.0.2-slim"
+run := "docker run --rm --network none -v $PWD:/app -w /app " + image
+run_ro := "docker run --rm --network none -v $PWD:/app:ro -w /app " + image
+
+default:
+    @just --list
+
+test:
+    {{run_ro}} ruby -Ilib -Itest test/marshal/parser_test.rb
+
+control:
+    {{run_ro}} ruby -Ilib -Itest test/control_check.rb
+
+lint:
+    {{run}} sh -c "gem install --no-document rubocop rubocop-minitest rubocop-performance rubocop-rake >/dev/null 2>&1 && rubocop --force-exclusion"
+
+check: test control
+
+probe:
+    {{run_ro}} ruby /app/test/support/probe.rb
+
+matrix:
+    @bash scripts/version-matrix.sh
+
+build:
+    {{run}} sh -c "gem build --strict rube.gemspec"
+
+manifest:
+    {{run_ro}} ruby -e 'spec = Gem::Specification.load("rube.gemspec"); puts spec.files.sort; puts; puts "#{spec.files.length} files"'
+
+shell:
+    docker run --rm -it --network none -v $PWD:/app -w /app {{image}} bash
+
+pull:
+    docker pull {{image}}
+    docker pull {{vuln_image}}
+
+clean:
+    rm -f *.gem
