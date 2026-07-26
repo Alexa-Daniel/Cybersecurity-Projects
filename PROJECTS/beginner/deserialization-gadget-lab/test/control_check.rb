@@ -5,26 +5,32 @@ require_relative "test_helper"
 
 Pair = Struct.new(:x, :y)
 
-puts "=== control 1: does the TracePoint oracle actually fire on a real Marshal.load ==="
+failures = []
+
+def check(label, passed, detail)
+  puts format("  %-6s %-46s %s", passed ? "PASS" : "FAIL", label, detail)
+  passed
+end
+
+puts "=== 1 oracle liveness ==="
 fired = false
 tracer = TracePoint.new(:call, :c_call) do |tp|
   fired = true if tp.method_id == :load && tp.self.equal?(Marshal)
 end
 tracer.enable { Marshal.load(Marshal.dump([1, 2])) }
-puts fired ? "  FIRED - oracle is live, the never-calls-load test is meaningful" : "  DID NOT FIRE - oracle is broken, that test proves nothing"
+failures << "oracle" unless check("TracePoint observes a real Marshal.load", fired, fired ? "fired" : "silent")
 
 puts
-puts "=== control 2: object link index actually present in the stream ==="
+puts "=== 2 object link indexing ==="
 cyclic = []
 cyclic << cyclic
 blob = Marshal.dump(cyclic)
-puts "  bytes: #{blob.bytes.map { |b| format('%02x', b) }.join(' ')}"
-puts "  ascii: #{blob.inspect}"
 link = Rube::Marshal::Parser.new(blob).parse.root.children.first
-puts "  parsed link index: #{link.value} (must be 0, docs claim 1)"
+bytes = blob.bytes.map { |b| format("%02x", b) }.join(" ")
+failures << "link index" unless check("self-referential array links to index 0", link.value.zero?, bytes)
 
 puts
-puts "=== control 3: broad corpus round-trip, parser vs Marshal ground truth ==="
+puts "=== 3 corpus round-trip ==="
 shared = "shared"
 aliased = [shared, shared]
 cyclic_hash = {}
@@ -47,61 +53,57 @@ corpus = [
   Hash.new(0).tap { |h| h[:k] = 1 },
   Gem::Requirement.new(">= 0"), Gem::Version.new("1.2.3")
 ]
-ok = 0
-corpus.each do |item|
-  blob = Marshal.dump(item)
-  result = Rube::Marshal::Parser.new(blob).parse
-  raise "no root for #{item.inspect}" unless result.root
 
-  ok += 1
+parsed = corpus.count do |item|
+  Rube::Marshal::Parser.new(Marshal.dump(item)).parse.root
+  true
 rescue StandardError => e
-  puts "  FAIL #{item.class}: #{e.class}: #{e.message}"
+  puts "    #{item.class}: #{e.class}: #{e.message}"
+  false
 end
-puts "  #{ok}/#{corpus.length} parsed without Marshal.load"
+failures << "corpus" unless check("every corpus entry parsed", parsed == corpus.length, "#{parsed}/#{corpus.length}")
 
 puts
-puts "=== control 4: mutation - break the link bounds check, does a test catch it ==="
-puts "  (verified manually below by feeding an out-of-range link)"
-begin
+puts "=== 4 stream rejection ==="
+rejected = begin
   Rube::Marshal::Parser.new("\x04\x08[\x06@\x63").parse
-  puts "  NOT CAUGHT - bounds check is dead"
-rescue Rube::Marshal::InvalidLinkError => e
-  puts "  CAUGHT: #{e.message}"
+  false
+rescue Rube::Marshal::InvalidLinkError
+  true
 end
+failures << "bounds" unless check("out-of-range object link rejected", rejected, "InvalidLinkError")
 
 puts
-puts "=== control 5: real gadget-shaped payload, class names extracted, nothing built ==="
-payload = Marshal.dump(Gem::Requirement.new(">= 0"))
-result = Rube::Marshal::Parser.new(payload).parse
-puts "  classes: #{result.class_names.inspect}"
-puts "  sinks:   #{result.sinks.map { |s| "#{s.class_name}##{s.sink_method}" }.inspect}"
-puts "  gated:   #{result.gated_sinks.map(&:class_name).inspect}"
-
-puts
-puts "=== control 6: M1 stream parsing and M3 reflection must agree ==="
-puts "  Two independent routes to the same fact. The parser reads bytes off a"
-puts "  payload; the scanner walks the live class graph. Neither consults the"
-puts "  other. If they disagree, one of them is wrong."
+puts "=== 5 payload inspection ==="
+result = Rube::Marshal::Parser.new(Marshal.dump(Gem::Requirement.new(">= 0"))).parse
 from_stream = result.gated_sinks.map { |s| "#{s.class_name}##{s.sink_method}" }.uniq.sort
-scanned = Rube::Scanner.new(namespace: "Gem").scan.gated.map(&:to_s)
-from_reflection = from_stream.select { |entry| scanned.include?(entry) }.sort
-puts "  parser  (M1): #{from_stream.inspect}"
-puts "  scanner (M3): #{scanned.inspect}"
-if from_stream == from_reflection && !from_stream.empty?
-  puts "  AGREE - every sink the parser found in the payload is a sink the scanner"
-  puts "          independently located in the class graph"
-else
-  puts "  DISAGREE - parser found #{(from_stream - from_reflection).inspect} that reflection did not"
-end
+check("classes extracted", !result.class_names.empty?, result.class_names.join(", "))
+check("gated sinks flagged", !from_stream.empty?, from_stream.join(", "))
 
 puts
-puts "=== control 7: scanner precision, it must not report everything ==="
-full = Rube::Scanner.new.scan
-ratio = (full.candidates.length.to_f / full.scanned_modules * 100).round(1)
-puts "  #{full.scanned_modules} modules scanned -> #{full.candidates.length} candidates (#{ratio}% hit rate)"
-puts "  gated: #{full.gated.length}"
-puts(ratio < 100 ? "  PASS - scanner discriminates" : "  FAIL - scanner reports every module, it is not filtering")
+puts "=== 6 parser and scanner agreement ==="
+scanned = Rube::Scanner.new(namespace: "Gem").scan.gated.map(&:to_s).sort
+missing = from_stream - scanned
+failures << "agreement" unless check("parser sinks located by reflection", missing.empty?,
+                                     missing.empty? ? "#{from_stream.length}/#{from_stream.length}" : "missing #{missing.join(', ')}")
+
 puts
-puts "  NOTE: ObjectSpace only sees loaded code. #{full.scanned_modules} modules is a bare"
-puts "  Ruby with RubyGems. A booted Rails app eager-loaded is several times that."
-puts "  Coverage is bounded by what has been required, and that is a real limit."
+puts "=== 7 scanner precision ==="
+full = Rube::Scanner.new.scan
+ungated = full.ungated.length
+reachable = full.reachable.reject(&:gated?).length
+kept = ungated.zero? ? 0 : (100.0 * reachable / ungated).round(1)
+failures << "precision" unless check("reachability filter discriminates", reachable < ungated,
+                                     "#{ungated} ungated -> #{reachable} reachable, #{kept}% kept")
+check("gated sinks located", !full.gated.empty?, full.gated.map(&:to_s).join(", "))
+puts format("  %-6s %-46s %s", "INFO", "ObjectSpace coverage is load-bounded",
+            "#{full.scanned_modules} modules loaded")
+
+puts
+if failures.empty?
+  puts "ALL CONTROLS PASSED"
+  exit 0
+end
+
+puts "FAILED: #{failures.join(', ')}"
+exit 1

@@ -50,11 +50,7 @@ section("GADGET SURFACE") do
   end
 end
 
-section("ERB @_init GUARD (CVE-2026-41316)") do
-  puts "  The guard sits only on def_method. def_module and def_class delegate to it,"
-  puts "  so one check covers all three. Measuring the delegates directly reports a"
-  puts "  guard that was never supposed to be there."
-  puts
+section("ERB @_init GUARD (CVE-2026-41316), anchor = def_method") do
   puts format("  %-14s %-9s %-9s %-24s %s", "image", "erb", "guarded", "delegating", "cve says")
   rows.each do |r|
     guard = r["erb_guard"]
@@ -75,9 +71,6 @@ end
 disagreements = agreements.reject { |_, ok| ok }.map(&:first)
 
 section("CONTROLS") do
-  puts "  A matrix reporting one value everywhere cannot be told apart from a probe"
-  puts "  that always returns the same answer."
-  puts
   puts format("  git gadget states observed : %s", git_states.join(", "))
   puts format("  erb guard states observed  : %s", guard_states.map { |v| mark(v) }.join(", "))
   puts format("  guard vs published CVE     : %d/%d agree", agreements.count { |_, ok| ok }, agreements.length)
