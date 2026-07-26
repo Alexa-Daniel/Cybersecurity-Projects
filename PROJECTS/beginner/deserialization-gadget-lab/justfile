@@ -23,7 +23,7 @@ lint:
 check: test control
 
 probe:
-    {{run_ro}} ruby /app/test/support/probe.rb
+    {{run_ro}} ruby /app/test/support/matrix_probe.rb
 
 matrix:
     @bash scripts/version-matrix.sh
