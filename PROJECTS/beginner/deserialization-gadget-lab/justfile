@@ -36,7 +36,10 @@ matrix:
 exploit:
     @bash scripts/exploit-gate.sh
 
-gate: check matrix exploit
+target:
+    @bash scripts/target-gate.sh
+
+gate: check matrix exploit target
 
 build:
     {{run}} sh -c "gem build --strict rube.gemspec"

