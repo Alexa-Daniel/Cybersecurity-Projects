@@ -113,6 +113,8 @@ module Rube
 
     def test_report_partitions_gated_and_ungated
       report = local_scan
+      refute_empty report.gated, "a partition test proves nothing if one side is empty"
+      refute_empty report.ungated, "a partition test proves nothing if one side is empty"
       assert_equal report.candidates.length, report.gated.length + report.ungated.length
       assert_empty(report.gated & report.ungated)
     end
@@ -123,9 +125,14 @@ module Rube
       assert_equal first, second
     end
 
-    def test_anonymous_classes_are_skipped
-      Class.new { def marshal_load(data); end }
-      refute(local_scan.candidates.any? { |c| c.class_name.nil? || c.class_name.empty? })
+    def test_anonymous_classes_contribute_no_candidate
+      anonymous = Class.new { def marshal_load(data); end }
+      location = anonymous.instance_method(:marshal_load).source_location.join(":")
+
+      report = scan
+      refute_empty report.gated, "the global scan found nothing, so absence proves nothing"
+      refute_includes report.candidates.map(&:source_location), location,
+                      "a class with no name reached the report"
     end
 
     def test_scanning_does_not_instantiate_anything

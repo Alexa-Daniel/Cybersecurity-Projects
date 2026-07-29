@@ -13,6 +13,11 @@ module Rube
       DEFAULT_MAX_SCALAR_BYTES = 262_144
       DEFAULT_MAX_TOTAL_SCALAR_BYTES = 524_288
       DEFAULT_MAX_OBJECT_LINKS = 2_048
+      DEFAULT_MAX_SYMBOL_REFERENCES = 2_048
+      DEFAULT_MAX_SYMBOL_NAME_BYTES = 1_024
+      DEFAULT_MAX_CLASS_NAME_BYTES = 1_024
+      DEFAULT_MAX_INSTANCE_VARIABLES = 256
+      DEFAULT_MAX_STRUCT_MEMBERS = 256
 
       ROLE_BYTES = "stream bytes"
       ROLE_NODES = "nodes"
@@ -22,10 +27,19 @@ module Rube
       ROLE_SCALAR = "scalar bytes"
       ROLE_TOTAL_SCALAR = "total scalar bytes"
       ROLE_LINKS = "object links"
+      ROLE_SYMBOL_REFERENCES = "symbol references"
+      ROLE_SYMBOL_NAME = "symbol name bytes"
+      ROLE_CLASS_NAME = "class name bytes"
+      ROLE_INSTANCE_VARIABLES = "instance variables"
+      ROLE_STRUCT_MEMBERS = "struct members"
+
+      UNBOUNDED = Float::INFINITY
 
       attr_reader :max_bytes, :max_depth, :max_nodes, :max_registered_objects,
                   :max_symbol_definitions, :max_collection_entries,
-                  :max_scalar_bytes, :max_total_scalar_bytes, :max_object_links
+                  :max_scalar_bytes, :max_total_scalar_bytes, :max_object_links,
+                  :max_symbol_references, :max_symbol_name_bytes, :max_class_name_bytes,
+                  :max_instance_variables, :max_struct_members
 
       def initialize(
         max_bytes: DEFAULT_MAX_BYTES,
@@ -36,7 +50,12 @@ module Rube
         max_collection_entries: DEFAULT_MAX_COLLECTION_ENTRIES,
         max_scalar_bytes: DEFAULT_MAX_SCALAR_BYTES,
         max_total_scalar_bytes: DEFAULT_MAX_TOTAL_SCALAR_BYTES,
-        max_object_links: DEFAULT_MAX_OBJECT_LINKS
+        max_object_links: DEFAULT_MAX_OBJECT_LINKS,
+        max_symbol_references: DEFAULT_MAX_SYMBOL_REFERENCES,
+        max_symbol_name_bytes: DEFAULT_MAX_SYMBOL_NAME_BYTES,
+        max_class_name_bytes: DEFAULT_MAX_CLASS_NAME_BYTES,
+        max_instance_variables: DEFAULT_MAX_INSTANCE_VARIABLES,
+        max_struct_members: DEFAULT_MAX_STRUCT_MEMBERS
       )
         @max_bytes = max_bytes
         @max_depth = max_depth
@@ -47,19 +66,29 @@ module Rube
         @max_scalar_bytes = max_scalar_bytes
         @max_total_scalar_bytes = max_total_scalar_bytes
         @max_object_links = max_object_links
+        @max_symbol_references = max_symbol_references
+        @max_symbol_name_bytes = max_symbol_name_bytes
+        @max_class_name_bytes = max_class_name_bytes
+        @max_instance_variables = max_instance_variables
+        @max_struct_members = max_struct_members
       end
 
-      def permissive
-        self.class.new(
-          max_bytes: Float::INFINITY,
+      def self.permissive
+        new(
+          max_bytes: UNBOUNDED,
           max_depth: Constants::DEFAULT_MAX_DEPTH,
-          max_nodes: Float::INFINITY,
-          max_registered_objects: Float::INFINITY,
-          max_symbol_definitions: Float::INFINITY,
-          max_collection_entries: Float::INFINITY,
-          max_scalar_bytes: Float::INFINITY,
-          max_total_scalar_bytes: Float::INFINITY,
-          max_object_links: Float::INFINITY
+          max_nodes: UNBOUNDED,
+          max_registered_objects: UNBOUNDED,
+          max_symbol_definitions: UNBOUNDED,
+          max_collection_entries: UNBOUNDED,
+          max_scalar_bytes: UNBOUNDED,
+          max_total_scalar_bytes: UNBOUNDED,
+          max_object_links: UNBOUNDED,
+          max_symbol_references: UNBOUNDED,
+          max_symbol_name_bytes: UNBOUNDED,
+          max_class_name_bytes: UNBOUNDED,
+          max_instance_variables: UNBOUNDED,
+          max_struct_members: UNBOUNDED
         )
       end
     end
@@ -71,6 +100,7 @@ module Rube
         @registered = 0
         @symbols = 0
         @links = 0
+        @symbol_references = 0
         @scalar_total = 0
       end
 
@@ -92,6 +122,27 @@ module Rube
       def link!
         @links += 1
         check(@links, limits.max_object_links, Limits::ROLE_LINKS)
+      end
+
+      def symbol_reference!
+        @symbol_references += 1
+        check(@symbol_references, limits.max_symbol_references, Limits::ROLE_SYMBOL_REFERENCES)
+      end
+
+      def symbol_name!(size)
+        check(size, limits.max_symbol_name_bytes, Limits::ROLE_SYMBOL_NAME)
+      end
+
+      def class_name!(size)
+        check(size, limits.max_class_name_bytes, Limits::ROLE_CLASS_NAME)
+      end
+
+      def instance_variables!(count)
+        check(count, limits.max_instance_variables, Limits::ROLE_INSTANCE_VARIABLES)
+      end
+
+      def struct_members!(count)
+        check(count, limits.max_struct_members, Limits::ROLE_STRUCT_MEMBERS)
       end
 
       def entries!(count)

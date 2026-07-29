@@ -18,6 +18,10 @@ module Rube
       REASON_MALFORMED = "stream is not canonical Marshal: %s"
       REASON_SINK = "stream reaches %s#%s during load, before any allowlist can run"
       REASON_UNAPPROVED = "stream references unapproved class %s"
+      REASON_KEY_DISPATCH = "stream puts %s in a hash key, so its #hash and #eql? run during " \
+                            "load, before any allowlist can act"
+      REASON_NONCANONICAL_VERSION = "stream declares Marshal %d.%d; every Ruby that can produce " \
+                                    "this format emits %d.%d"
 
       LIMITATION_NOTICE = <<~NOTICE.freeze
         SECURITY LIMITATION
@@ -105,7 +109,16 @@ module Rube
       def violation_for(result)
         sink = result.sinks.first
         return format(REASON_SINK, sink.class_name, sink.sink_method) if sink
+
+        key = result.dispatching_hash_keys.first
+        return format(REASON_KEY_DISPATCH, key.effective_class_name) if key
+
         return nil if policy == POLICY_DENY_SINKS_ONLY
+
+        unless result.canonical_version?
+          return format(REASON_NONCANONICAL_VERSION, result.major, result.minor,
+                        Constants::MAJOR_VERSION, Constants::MINOR_VERSION)
+        end
 
         unapproved = result.class_names.reject { |name| allowed_class_names.include?(name) }
         return format(REASON_UNAPPROVED, unapproved.join(", ")) unless unapproved.empty?

@@ -1,7 +1,9 @@
 # ©AngelaMos | 2026
 # control_check.rb
 
-require_relative "test_helper"
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
+require "rube"
 
 Pair = Struct.new(:x, :y)
 
@@ -77,15 +79,24 @@ puts
 puts "=== 5 payload inspection ==="
 result = Rube::Marshal::Parser.new(Marshal.dump(Gem::Requirement.new(">= 0"))).parse
 from_stream = result.gated_sinks.map { |s| "#{s.class_name}##{s.sink_method}" }.uniq.sort
-check("classes extracted", !result.class_names.empty?, result.class_names.join(", "))
-check("gated sinks flagged", !from_stream.empty?, from_stream.join(", "))
+failures << "class names" unless check("classes extracted", !result.class_names.empty?,
+                                       result.class_names.join(", "))
+failures << "gated sinks" unless check("gated sinks flagged", !from_stream.empty?,
+                                       from_stream.join(", "))
 
 puts
 puts "=== 6 parser and scanner agreement ==="
 scanned = Rube::Scanner.new(namespace: "Gem").scan.gated.map(&:to_s).sort
 missing = from_stream - scanned
-failures << "agreement" unless check("parser sinks located by reflection", missing.empty?,
-                                     missing.empty? ? "#{from_stream.length}/#{from_stream.length}" : "missing #{missing.join(', ')}")
+located = !from_stream.empty? && missing.empty?
+agreement_detail = if from_stream.empty?
+                     "vacuous, section 5 produced no sinks to locate"
+                   elsif missing.empty?
+                     "#{from_stream.length}/#{from_stream.length}"
+                   else
+                     "missing #{missing.join(', ')}"
+                   end
+failures << "agreement" unless check("parser sinks located by reflection", located, agreement_detail)
 
 puts
 puts "=== 7 scanner precision ==="
@@ -93,9 +104,13 @@ full = Rube::Scanner.new.scan
 ungated = full.ungated.length
 reachable = full.reachable.reject(&:gated?).length
 kept = ungated.zero? ? 0 : (100.0 * reachable / ungated).round(1)
-failures << "precision" unless check("reachability filter discriminates", reachable < ungated,
+failures << "prism" unless check("prism backend live, so reachability is real", full.prism_available?,
+                                 full.prism_available? ? "Prism.parse_file in use" : "ABSENT, touches_state? is always false")
+failures << "precision" unless check("reachability filter discriminates",
+                                     reachable.positive? && reachable < ungated,
                                      "#{ungated} ungated -> #{reachable} reachable, #{kept}% kept")
-check("gated sinks located", !full.gated.empty?, full.gated.map(&:to_s).join(", "))
+failures << "gated located" unless check("gated sinks located", !full.gated.empty?,
+                                         full.gated.map(&:to_s).join(", "))
 puts format("  %-6s %-46s %s", "INFO", "ObjectSpace coverage is load-bounded",
             "#{full.scanned_modules} modules loaded")
 

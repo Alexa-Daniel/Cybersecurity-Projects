@@ -79,6 +79,10 @@ module Rube
       def reachable
         candidates.select(&:reachable?)
       end
+
+      def prism_available?
+        PRISM_AVAILABLE
+      end
     end
 
     def initialize(namespace: nil)

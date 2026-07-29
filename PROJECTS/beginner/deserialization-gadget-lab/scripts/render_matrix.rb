@@ -2,6 +2,7 @@
 # render_matrix.rb
 
 require "json"
+require "rube"
 
 TRACKED_CLASSES = %w[Gem::SpecFetcher Gem::Source::Git Gem::URI Net::WriteAdapter].freeze
 MARK_YES = "yes"
@@ -9,7 +10,11 @@ MARK_NO = "no"
 MARK_UNKNOWN = "?"
 RULE_WIDTH = 78
 
-CVE_PATCHED_ERB = ["4.0.3.1", "4.0.4.1", "6.0.1.1", "6.0.4"].freeze
+CHAIN = Rube::Chains::ErbDefMethod
+
+def cve_patched?(version)
+  !CHAIN.affects?(version)
+end
 
 rows = File.readlines(ARGV.fetch(0)).reject { |line| line.strip.empty? }.map { |line| JSON.parse(line) }
 abort "no probe results" if rows.empty?
@@ -54,7 +59,7 @@ section("ERB @_init GUARD (CVE-2026-41316), anchor = def_method") do
   puts format("  %-14s %-9s %-9s %-24s %s", "image", "erb", "guarded", "delegating", "cve says")
   rows.each do |r|
     guard = r["erb_guard"]
-    expected = CVE_PATCHED_ERB.include?(r["erb"]) ? "patched" : "affected"
+    expected = cve_patched?(r["erb"]) ? "patched" : "affected"
     puts format("  %-14s %-9s %-9s %-24s %s",
                 short(r["image"]), r["erb"], mark(guard["guarded"]),
                 guard["delegating"].join(","), expected)
@@ -65,8 +70,7 @@ git_states = rows.map { |r| r["git_gadget"] }.uniq
 guard_states = rows.map { |r| r["erb_guard"]["guarded"] }.uniq
 
 agreements = rows.map do |r|
-  expected_patched = CVE_PATCHED_ERB.include?(r["erb"])
-  [short(r["image"]), r["erb_guard"]["guarded"] == expected_patched]
+  [short(r["image"]), r["erb_guard"]["guarded"] == cve_patched?(r["erb"])]
 end
 disagreements = agreements.reject { |_, ok| ok }.map(&:first)
 

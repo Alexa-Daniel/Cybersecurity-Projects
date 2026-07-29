@@ -36,6 +36,7 @@ module Rube
 
       BIGNUM_SIGN_POSITIVE = "+"
       BIGNUM_SIGN_NEGATIVE = "-"
+      BIGNUM_SIGNS = [BIGNUM_SIGN_POSITIVE, BIGNUM_SIGN_NEGATIVE].freeze
       BIGNUM_WORD_BYTES = 2
 
       FIXNUM_INLINE_OFFSET = 5
@@ -55,6 +56,10 @@ module Rube
       ROLE_IVAR = "instance variable"
       ROLE_STRUCT = "struct member"
       ROLE_BIGNUM = "bignum word"
+
+      CLASS_NAME_TYPES = %i[symbol symlink].freeze
+
+      REGISTERED_WRAPPER_TYPES = %i[data].freeze
 
       SINK_TAGS = [TAG_USERDEF, TAG_USERMARSHAL, TAG_DATA].freeze
 

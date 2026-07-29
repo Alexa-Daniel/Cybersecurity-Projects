@@ -2,6 +2,7 @@
 # boundary_detector_test.rb
 
 require_relative "../test_helper"
+require_relative "../support/adversarial_corpus"
 
 module Rube
   module Marshal
@@ -108,6 +109,28 @@ module Rube
         assert_predicate decision, :rejected?
       end
 
+      def test_rejects_a_version_the_parser_accepts_but_no_ruby_emits
+        older = "\x04\x07\x30".b
+
+        assert_predicate Parser.new(older).parse, :root,
+                         "control: the parser must still accept it, it is a forensic tool"
+        decision = detector.inspect_stream(older)
+        assert_predicate decision, :rejected?
+        assert_includes decision.reason, "4.7"
+      end
+
+      def test_canonical_version_is_accepted
+        assert_predicate detector.inspect_stream(benign_blob), :accepted?
+      end
+
+      def test_deny_sinks_only_does_not_police_the_version
+        decision = detector(policy: BoundaryDetector::POLICY_DENY_SINKS_ONLY)
+                   .inspect_stream("\x04\x07\x30".b)
+        assert_predicate decision, :accepted?,
+                         "version canonicality runs no code during load, so it belongs with " \
+                         "the allowlist, not with the sink checks"
+      end
+
       def test_rejects_unknown_policy
         assert_raises(ArgumentError) { detector(policy: :yolo) }
       end
@@ -130,36 +153,132 @@ module Rube
         refute_includes decision.snapshot, "tampered"
       end
 
-      def test_enforces_a_byte_ceiling_before_parsing
-        limits = Limits.new(max_bytes: 8)
-        decision = detector(limits: limits).inspect_stream(benign_blob)
+      def assert_ceiling_rejects(blob, error_name, allowed: [], **narrow)
+        assert_predicate detector(allowed_class_names: allowed).inspect_stream(blob), :accepted?,
+                         "control: this payload must be accepted under default limits, " \
+                         "or the ceiling is not what rejected it"
+
+        decision = detector(allowed_class_names: allowed, limits: Limits.new(**narrow)).inspect_stream(blob)
         assert_predicate decision, :rejected?
-        assert_includes decision.reason, "LimitExceededError"
+        assert_includes decision.reason, error_name
+        decision
+      end
+
+      def test_enforces_a_byte_ceiling_before_parsing
+        assert_ceiling_rejects(benign_blob, "LimitExceededError", max_bytes: 8)
       end
 
       def test_enforces_a_depth_ceiling
         deep = "\x04\x08" + ("[\x06" * 80) + "0"
+        shallow = "\x04\x08" + ("[\x06" * 8) + "0"
+
+        assert_predicate detector.inspect_stream(shallow), :accepted?,
+                         "control: nesting inside the ceiling must be accepted"
         decision = detector.inspect_stream(deep)
         assert_predicate decision, :rejected?
+        assert_includes decision.reason, "DepthLimitError"
       end
 
       def test_enforces_a_collection_entry_ceiling
-        limits = Limits.new(max_collection_entries: 2)
-        decision = detector(limits: limits).inspect_stream(::Marshal.dump([1, 2, 3, 4, 5]))
-        assert_predicate decision, :rejected?
+        assert_ceiling_rejects(::Marshal.dump([1, 2, 3, 4, 5]), "LimitExceededError",
+                               max_collection_entries: 2)
       end
 
       def test_enforces_a_symbol_ceiling
-        limits = Limits.new(max_symbol_definitions: 2)
-        blob = ::Marshal.dump(%i[a b c d e f])
-        decision = detector(limits: limits).inspect_stream(blob)
-        assert_predicate decision, :rejected?
+        assert_ceiling_rejects(::Marshal.dump(%i[a b c d e f]), "LimitExceededError",
+                               max_symbol_definitions: 2)
       end
 
       def test_enforces_a_node_ceiling
-        limits = Limits.new(max_nodes: 5)
-        decision = detector(limits: limits).inspect_stream(::Marshal.dump((1..50).to_a))
-        assert_predicate decision, :rejected?
+        assert_ceiling_rejects(::Marshal.dump((1..50).to_a), "LimitExceededError",
+                               max_nodes: 5)
+      end
+
+      def test_enforces_a_bignum_magnitude_ceiling
+        words = AdversarialCorpus::BIGNUM_HUGE_WORDS
+        blob = AdversarialCorpus.stream(AdversarialCorpus.bignum("+", words))
+        decision = detector.inspect_stream(blob)
+
+        assert_predicate decision, :rejected?,
+                         "#{words * AdversarialCorpus::BIGNUM_WORD_BYTES} magnitude bytes must be " \
+                         "charged the same budget a string of that size is charged"
+        assert_includes decision.reason, "LimitExceededError"
+      end
+
+      def test_enforces_a_symbol_reference_ceiling
+        count = AdversarialCorpus::BULK_ENTRY_COUNT
+        blob = AdversarialCorpus.stream(
+          "[#{AdversarialCorpus.fixnum(count + 1)}#{AdversarialCorpus.symlink_run(count)}"
+        )
+        assert_ceiling_rejects(blob, "LimitExceededError", max_symbol_references: 8)
+      end
+
+      def test_enforces_a_symbol_name_byte_ceiling
+        blob = AdversarialCorpus.stream(AdversarialCorpus.sym("A" * AdversarialCorpus::MODEST_NAME_BYTES))
+        assert_ceiling_rejects(blob, "LimitExceededError", max_symbol_name_bytes: 32)
+      end
+
+      def test_enforces_a_class_name_byte_ceiling
+        name = "A" * AdversarialCorpus::MODEST_NAME_BYTES
+        blob = AdversarialCorpus.stream("c#{AdversarialCorpus.fixnum(name.bytesize)}#{name}")
+        assert_ceiling_rejects(blob, "LimitExceededError", allowed: [name], max_class_name_bytes: 32)
+      end
+
+      def test_enforces_an_instance_variable_ceiling
+        blob = AdversarialCorpus.stream(
+          "o#{AdversarialCorpus.sym('F')}#{AdversarialCorpus.ivar_run(AdversarialCorpus::MODEST_ENTRY_COUNT)}"
+        )
+        assert_ceiling_rejects(blob, "LimitExceededError", allowed: %w[F], max_instance_variables: 8)
+      end
+
+      def test_enforces_a_struct_member_ceiling
+        blob = AdversarialCorpus.stream(
+          "S#{AdversarialCorpus.sym('F')}#{AdversarialCorpus.ivar_run(AdversarialCorpus::MODEST_ENTRY_COUNT)}"
+        )
+        assert_ceiling_rejects(blob, "LimitExceededError", allowed: %w[F], max_struct_members: 8)
+      end
+
+      def default_limit_probes
+        long = "A" * AdversarialCorpus::LONG_NAME_BYTES
+        bulk = AdversarialCorpus::BULK_ENTRY_COUNT
+
+        {
+          "bignum magnitude" =>
+            [AdversarialCorpus.stream(AdversarialCorpus.bignum("+", AdversarialCorpus::BIGNUM_HUGE_WORDS)), []],
+          "symbol references" =>
+            [AdversarialCorpus.stream(
+              AdversarialCorpus.symlink_groups(AdversarialCorpus::SYMLINK_BULK_GROUPS,
+                                               AdversarialCorpus::SYMLINK_BULK_PER_GROUP)
+            ), []],
+          "symbol name bytes" =>
+            [AdversarialCorpus.stream(AdversarialCorpus.sym(long)), []],
+          "class name bytes" =>
+            [AdversarialCorpus.stream("c#{AdversarialCorpus.fixnum(long.bytesize)}#{long}"), [long]],
+          "instance variables" =>
+            [AdversarialCorpus.stream("o#{AdversarialCorpus.sym('F')}#{AdversarialCorpus.ivar_run(bulk)}"), %w[F]],
+          "struct members" =>
+            [AdversarialCorpus.stream("S#{AdversarialCorpus.sym('F')}#{AdversarialCorpus.ivar_run(bulk)}"), %w[F]]
+        }
+      end
+
+      def test_default_limits_bound_every_axis_without_being_asked
+        admitted = default_limit_probes.reject do |_axis, (blob, allowed)|
+          decision = detector(allowed_class_names: allowed).inspect_stream(blob)
+          decision.rejected? && decision.reason.include?("LimitExceededError")
+        end
+
+        assert_empty admitted.keys,
+                     "Limits.new must bound these without a caller opting in: #{admitted.keys.join(', ')}"
+      end
+
+      def test_permissive_limits_admit_what_the_defaults_reject
+        admitted = default_limit_probes.count do |_axis, (blob, allowed)|
+          detector(allowed_class_names: allowed, limits: Limits.permissive).inspect_stream(blob).accepted?
+        end
+
+        assert_operator admitted, :>, 0,
+                        "control: permissive must actually differ from the defaults, " \
+                        "otherwise the previous test proves nothing about the ceilings"
       end
 
       def test_never_exposes_a_safety_claiming_api

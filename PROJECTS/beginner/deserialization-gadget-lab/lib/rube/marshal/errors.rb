@@ -19,6 +19,8 @@ module Rube
 
     class MalformedCountError < StreamError; end
 
+    class MalformedValueError < StreamError; end
+
     class LimitExceededError < StreamError; end
 
     class InputTypeError < StreamError; end

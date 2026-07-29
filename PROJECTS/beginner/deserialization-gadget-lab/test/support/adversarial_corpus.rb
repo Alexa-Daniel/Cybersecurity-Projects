@@ -52,10 +52,50 @@ module Rube
         allowed: allowed.freeze }.freeze
     end
 
+    def ivar_chain(depth)
+      (("I" * depth) + "0" + ("\x00" * depth)).b
+    end
+
+    def array_nest(depth)
+      ("[#{fixnum(1)}" * depth).b
+    end
+
+    def regexp(source)
+      "/#{fixnum(source.bytesize)}#{source}\x00".b
+    end
+
+    def bignum(sign, word_count, fill = "\x01")
+      "l#{sign}#{fixnum(word_count)}#{fill * (word_count * BIGNUM_WORD_BYTES)}".b
+    end
+
+    def symlink_run(count)
+      (sym("s") + (symlink(0) * count)).b
+    end
+
+    def symlink_groups(groups, per_group)
+      inner = "[#{fixnum(per_group)}#{symlink(0) * per_group}"
+      "[#{fixnum(groups + 1)}#{sym('s')}#{inner * groups}".b
+    end
+
+    def ivar_run(count)
+      "#{fixnum(count)}#{sym('@a')}0#{"#{symlink(1)}0" * (count - 1)}".b
+    end
+
     NESTED_DEPTH = 80
     WIDE_COUNT = 4_096
     MANY_SYMBOLS = 400
     HUGE_SCALAR = 300_000
+    IVAR_CHAIN_DEPTH = 6_000
+    USERDEF_NEST_DEPTH = 3
+    BIGNUM_WORD_BYTES = 2
+    BIGNUM_HUGE_WORDS = 200_000
+    LONG_NAME_BYTES = 100_000
+    BULK_ENTRY_COUNT = 1_000
+    MODEST_NAME_BYTES = 64
+    MODEST_ENTRY_COUNT = 16
+    SYMLINK_BULK_GROUPS = 3
+    SYMLINK_BULK_PER_GROUP = 1_000
+    BIGNUM_SIGNS = ["-", "+", "!", "\x00", "\xFF", "0"].freeze
 
     TRIPWIRE_CLASS = "Tripwire"
     HOST_CLASS = "Comparable"
@@ -94,6 +134,27 @@ module Rube
 
     IVAR_DISTINCT_NAMES_CONTROL =
       stream("I#{str('hello')}#{fixnum(2)}#{sym(COLLIDING_IVAR)}#{TRIPWIRE}#{sym(HIDDEN_IVAR)}0")
+
+    PLAIN_OBJECT = "o#{sym(OBJECT_CLASS)}#{fixnum(0)}".b
+
+    HASH_KEY_SHAPES_THAT_DISPATCH = {
+      object: stream("{#{fixnum(1)}#{PLAIN_OBJECT}0"),
+      object_link: stream("[#{fixnum(2)}#{PLAIN_OBJECT}{#{fixnum(1)}@#{fixnum(1)}0"),
+      struct: stream("{#{fixnum(1)}S#{sym(OBJECT_CLASS)}#{fixnum(0)}0"),
+      extended: stream("{#{fixnum(1)}e#{sym(HOST_CLASS)}#{PLAIN_OBJECT}0"),
+      user_class_over_array: stream("{#{fixnum(1)}C#{sym(OBJECT_CLASS)}[#{fixnum(0)}0")
+    }.freeze
+
+    HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH = {
+      user_class_over_string: stream("{#{fixnum(1)}C#{sym(OBJECT_CLASS)}#{str('x')}0"),
+      extended_over_string: stream("{#{fixnum(1)}e#{sym(HOST_CLASS)}#{str('x')}0"),
+      regexp: stream("{#{fixnum(1)}#{regexp('ab')}0"),
+      symbol: stream("{#{fixnum(1)}#{sym('k')}0"),
+      string: stream("{#{fixnum(1)}#{str('k')}0")
+    }.freeze
+
+    OBJECT_IN_VALUE_POSITION =
+      stream("{#{fixnum(1)}#{sym('k')}#{PLAIN_OBJECT}")
 
     CASES = [
       entry(:nil_literal, stream("0"), VERDICT_ACCEPT,
@@ -161,6 +222,9 @@ module Rube
             "declares a three-byte integer and supplies one byte"),
       entry(:deep_nesting, stream(("[\x06" * NESTED_DEPTH) + "0"), VERDICT_REJECT,
             "nesting past the boundary depth ceiling"),
+      entry(:deep_instance_variable_chain, stream(ivar_chain(IVAR_CHAIN_DEPTH)), VERDICT_REJECT,
+            "the I wrapper must charge depth, or a 12 KB cookie exhausts the Ruby stack " \
+            "with a SystemStackError that no rescue StreamError can catch"),
       entry(:wide_collection, stream("[#{fixnum(WIDE_COUNT)}#{'0' * WIDE_COUNT}"), VERDICT_REJECT,
             "one collection consuming the whole node budget"),
       entry(:many_symbols, stream("[#{fixnum(MANY_SYMBOLS)}#{(0...MANY_SYMBOLS).map { |i| sym("s#{i}") }.join}"),
@@ -207,7 +271,41 @@ module Rube
             allowed: [HOST_CLASS]),
       entry(:class_name_slot_extended, CLASS_NAME_SLOTS[:extended], VERDICT_REJECT,
             "byte-identical gadget in an extend wrapper slot",
-            allowed: [HOST_CLASS])
+            allowed: [HOST_CLASS]),
+
+      entry(:object_in_value_position_control, OBJECT_IN_VALUE_POSITION, VERDICT_ACCEPT,
+            "control: an allowlisted class is fine as a hash VALUE, which is what makes the " \
+            "key-position cases below a statement about position rather than about the class",
+            allowed: [OBJECT_CLASS]),
+
+      entry(:hash_key_object, HASH_KEY_SHAPES_THAT_DISPATCH[:object], VERDICT_REJECT,
+            "an allowlisted class in KEY position runs its #hash during load",
+            allowed: [OBJECT_CLASS]),
+      entry(:hash_key_object_link, HASH_KEY_SHAPES_THAT_DISPATCH[:object_link], VERDICT_REJECT,
+            "the same dispatch reached through an object link instead of a fresh object",
+            allowed: [OBJECT_CLASS]),
+      entry(:hash_key_struct, HASH_KEY_SHAPES_THAT_DISPATCH[:struct], VERDICT_REJECT,
+            "a struct in key position dispatches too",
+            allowed: [OBJECT_CLASS]),
+      entry(:hash_key_extended, HASH_KEY_SHAPES_THAT_DISPATCH[:extended], VERDICT_REJECT,
+            "an extended object in key position dispatches the module's #hash",
+            allowed: [OBJECT_CLASS, HOST_CLASS]),
+      entry(:hash_key_user_class_over_array, HASH_KEY_SHAPES_THAT_DISPATCH[:user_class_over_array],
+            VERDICT_REJECT,
+            "an Array subclass in key position dispatches the subclass #hash",
+            allowed: [OBJECT_CLASS]),
+
+      entry(:hash_key_user_class_over_string, HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH[:user_class_over_string],
+            VERDICT_ACCEPT,
+            "precision control: rb_any_hash keys on T_STRING, so a String subclass never " \
+            "reaches a user #hash and rejecting it would be a false positive",
+            allowed: [OBJECT_CLASS]),
+      entry(:hash_key_extended_over_string, HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH[:extended_over_string],
+            VERDICT_ACCEPT,
+            "same exemption when the string is reached through an extend wrapper",
+            allowed: [HOST_CLASS]),
+      entry(:hash_key_regexp, HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH[:regexp], VERDICT_ACCEPT,
+            "a regexp key names no class, so the payload cannot choose whose #hash runs")
     ].freeze
   end
 end

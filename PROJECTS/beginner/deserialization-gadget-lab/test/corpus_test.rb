@@ -37,7 +37,7 @@ module Rube
       leaks = AdversarialCorpus::CASES.filter_map do |kase|
         detector(kase[:allowed]).inspect_stream(kase[:bytes])
         nil
-      rescue StandardError => e
+      rescue Exception => e
         "#{kase[:name]}: #{e.class}"
       end
 

@@ -35,6 +35,85 @@ module Rube
         assert_equal :nil, parse("\x04\x07\x30").root.type
       end
 
+      def ruby_accepts_stream?(bytes)
+        ::Marshal.load(bytes)
+        true
+      rescue ArgumentError, TypeError
+        false
+      end
+
+      def parser_accepts_stream?(bytes)
+        parse(bytes)
+        true
+      rescue StreamError
+        false
+      end
+
+      def test_header_version_agreement_with_real_ruby
+        probes = (0..9).to_h { |minor| ["4.#{minor}", "\x04#{minor.chr}0".b] }
+        observed = probes.transform_values { |bytes| ruby_accepts_stream?(bytes) }
+
+        assert_includes observed.values, true, "no version accepted, so the oracle is dead"
+        assert_includes observed.values, false, "every version accepted, so the oracle proves nothing"
+
+        mismatches = probes.filter_map do |label, bytes|
+          mine = parser_accepts_stream?(bytes)
+          next if mine == observed.fetch(label)
+
+          "#{label}: ruby=#{observed.fetch(label)} parser=#{mine}"
+        end
+
+        assert_empty mismatches,
+                     "the parser is a forensic tool and must accept exactly what Marshal.load " \
+                     "accepts:\n  #{mismatches.join("\n  ")}"
+      end
+
+      def test_result_reports_the_declared_version
+        result = parse("\x04\x07\x30")
+        assert_equal [4, 7], [result.major, result.minor]
+        refute_predicate result, :canonical_version?
+
+        assert_predicate parse(::Marshal.dump(nil)), :canonical_version?
+      end
+
+      class RoleFixture; end
+
+      def class_name_slot_streams
+        name = "Rube::Marshal::ParserTest::RoleFixture"
+        symbol = AdversarialCorpus.sym(name)
+
+        {
+          "symbol" => AdversarialCorpus.stream("o#{symbol}#{AdversarialCorpus.fixnum(0)}"),
+          "ivar wrapped symbol" => AdversarialCorpus.stream(
+            "oI#{symbol}#{AdversarialCorpus.fixnum(1)}#{AdversarialCorpus.sym('E')}T#{AdversarialCorpus.fixnum(0)}"
+          ),
+          "symlink" => AdversarialCorpus.stream(
+            "[#{AdversarialCorpus.fixnum(2)}#{symbol}o#{AdversarialCorpus.symlink(0)}#{AdversarialCorpus.fixnum(0)}"
+          ),
+          "fixnum" => AdversarialCorpus.stream("oi\x0a#{AdversarialCorpus.fixnum(0)}"),
+          "string" => AdversarialCorpus.stream("o#{AdversarialCorpus.str(name)}#{AdversarialCorpus.fixnum(0)}"),
+          "nil" => AdversarialCorpus.stream("o0#{AdversarialCorpus.fixnum(0)}")
+        }
+      end
+
+      def test_class_name_slot_role_agreement_with_real_ruby
+        observed = class_name_slot_streams.transform_values { |bytes| ruby_accepts_stream?(bytes) }
+
+        assert_includes observed.values, true, "no slot accepted, so the oracle is dead"
+        assert_includes observed.values, false, "every slot accepted, so the oracle proves nothing"
+
+        mismatches = class_name_slot_streams.filter_map do |label, bytes|
+          mine = parser_accepts_stream?(bytes)
+          next if mine == observed.fetch(label)
+
+          "#{label}: ruby=#{observed.fetch(label)} parser=#{mine}"
+        end
+
+        assert_empty mismatches,
+                     "a class-name slot accepts only a symbol, an ivar-wrapped symbol, or a " \
+                     "symlink:\n  #{mismatches.join("\n  ")}"
+      end
+
       def test_rejects_unknown_tag
         assert_raises(UnknownTagError) { parse("\x04\x08\x00") }
       end
@@ -62,6 +141,55 @@ module Rube
       def test_parses_bignum_both_signs
         [2**64, -(2**64), 2**128 + 7].each do |n|
           assert_equal n, roundtrip(n).value, "bignum #{n} did not round-trip"
+        end
+      end
+
+      def ruby_rejects_bignum_sign?(bytes)
+        ::Marshal.load(bytes)
+        false
+      rescue ArgumentError, TypeError
+        true
+      end
+
+      def parser_rejects_bignum_sign?(bytes)
+        parse(bytes)
+        false
+      rescue StreamError
+        true
+      end
+
+      def test_bignum_sign_byte_agreement_with_real_ruby
+        probes = AdversarialCorpus::BIGNUM_SIGNS.to_h do |sign|
+          [sign, AdversarialCorpus.stream(AdversarialCorpus.bignum(sign, 1))]
+        end
+        observed = probes.transform_values { |bytes| ruby_rejects_bignum_sign?(bytes) }
+
+        assert_includes observed.values, true, "no sign was rejected, so the oracle is dead"
+        assert_includes observed.values, false, "every sign was rejected, so the oracle proves nothing"
+
+        mismatches = probes.filter_map do |sign, bytes|
+          mine = parser_rejects_bignum_sign?(bytes)
+          next if mine == observed.fetch(sign)
+
+          "#{sign.inspect}: ruby_rejects=#{observed.fetch(sign)} parser_rejects=#{mine}"
+        end
+
+        assert_empty mismatches, "bignum sign handling diverges from Marshal.load:\n  #{mismatches.join("\n  ")}"
+      end
+
+      def test_bignum_magnitude_is_charged_the_same_budget_as_a_string
+        words = AdversarialCorpus::BIGNUM_HUGE_WORDS
+        magnitude = words * AdversarialCorpus::BIGNUM_WORD_BYTES
+        limits = Limits.new
+
+        big = AdversarialCorpus.stream(AdversarialCorpus.bignum("+", words))
+        str = AdversarialCorpus.stream(AdversarialCorpus.str("A" * magnitude))
+
+        assert_raises(LimitExceededError, "a #{magnitude}-byte string is rejected") do
+          Parser.new(str, limits: limits).parse
+        end
+        assert_raises(LimitExceededError, "so #{magnitude} bignum magnitude bytes must be too") do
+          Parser.new(big, limits: limits).parse
         end
       end
 
@@ -103,6 +231,40 @@ module Rube
         link = node.children.first
         assert_equal :object_link, link.type
         assert_equal 0, link.value
+      end
+
+      class LinkStringSubclass < String; end
+
+      module LinkExtension; end
+
+      def link_probe(first)
+        shared = +"ccc"
+        ::Marshal.dump([first, +"bbb", shared, shared])
+      end
+
+      def link_probes
+        {
+          "plain object (o)" => link_probe(Object.new),
+          "user_class (C)" => link_probe(LinkStringSubclass.new("aaa")),
+          "extended (e)" => link_probe((+"aaa").extend(LinkExtension))
+        }
+      end
+
+      def test_object_link_indices_match_ruby_for_wrapper_tags
+        mismatches = link_probes.filter_map do |label, blob|
+          link = parse(blob).nodes.find { |node| node.type == :object_link }
+          flunk "#{label}: fixture carries no object link, so it proves nothing" unless link
+
+          ruby_target = ::Marshal.load(blob)[3]
+          next if link.link_target&.value == ruby_target
+
+          "#{label}: index #{link.value} resolves to " \
+            "#{link.link_target&.value.inspect}, Ruby resolves it to #{ruby_target.inspect}"
+        end
+
+        assert_empty mismatches,
+                     "a wrapper tag must occupy the same object-table slot Ruby gives it:\n  " \
+                     "#{mismatches.join("\n  ")}"
       end
 
       def test_rejects_out_of_bounds_object_link
@@ -184,9 +346,35 @@ module Rube
         assert_raises(MalformedCountError) { parse("\x04\x08S:\x06A\xFA") }
       end
 
+      def test_negative_length_is_caught_by_the_count_guard_not_the_take_guard
+        error = assert_raises(MalformedCountError) { parse("\x04\x08\"\xFA") }
+        assert_includes error.message, Constants::ROLE_LENGTH,
+                        "take's own guard caught it, so read_count is not enforcing anything"
+      end
+
       def test_negative_counts_never_rewind_the_cursor
         parser = Parser.new("\x04\x08\"\xFA")
+        before = parser.instance_variable_get(:@position)
         assert_raises(MalformedCountError) { parser.parse }
+        assert_operator parser.instance_variable_get(:@position), :>=, before,
+                        "the cursor moved backwards, which is a loop primitive"
+      end
+
+      def test_parses_regexp_and_consumes_its_options_byte
+        node = roundtrip(/pattern/i)
+        assert_equal :regexp, node.type
+        assert_equal "pattern", node.value
+      end
+
+      def test_parses_regexp_nested_in_a_collection
+        node = roundtrip([/first/, /second/mx])
+        assert_equal %w[first second], node.children.map(&:value)
+      end
+
+      def test_regexp_options_byte_is_not_mistaken_for_the_next_value
+        node = roundtrip([/pattern/ix, :sentinel])
+        assert_equal :symbol, node.children.last.type
+        assert_equal :sentinel, node.children.last.value
       end
 
       def test_every_malformed_count_stays_inside_the_stream_error_hierarchy
@@ -261,9 +449,59 @@ module Rube
         assert_raises(DepthLimitError) { parse(deep) }
       end
 
+      def test_parser_defaults_to_bounded_limits_not_permissive
+        blob = AdversarialCorpus.stream(AdversarialCorpus.sym("A" * AdversarialCorpus::LONG_NAME_BYTES))
+
+        assert_raises(LimitExceededError, "a bare Parser.new must not be unbounded") do
+          Parser.new(blob).parse
+        end
+        assert_equal :symbol, Parser.new(blob, limits: Limits.permissive).parse.root.type,
+                     "control: permissive must admit it, or a ceiling is not what rejected it"
+      end
+
+      def test_default_depth_ceiling_is_the_limits_value_not_the_permissive_one
+        deep = AdversarialCorpus.stream(AdversarialCorpus.array_nest(Limits::DEFAULT_MAX_DEPTH + 5) + "0")
+
+        assert_raises(DepthLimitError) { Parser.new(deep).parse }
+        assert_operator Limits::DEFAULT_MAX_DEPTH, :<, Constants::DEFAULT_MAX_DEPTH,
+                        "control: the two depth constants must differ, or this test cannot discriminate"
+      end
+
       def test_honours_custom_depth_limit
         blob = ::Marshal.dump([[[1]]])
         assert_raises(DepthLimitError) { Parser.new(blob, max_depth: 2).parse }
+      end
+
+      def test_instance_variable_wrapper_counts_toward_the_depth_limit
+        chain = AdversarialCorpus.stream(
+          AdversarialCorpus.ivar_chain(Constants::DEFAULT_MAX_DEPTH + 5)
+        )
+        assert_raises(DepthLimitError) { parse(chain) }
+      end
+
+      def test_deep_instance_variable_chain_rejects_before_the_ruby_stack_runs_out
+        chain = AdversarialCorpus.stream(
+          AdversarialCorpus.ivar_chain(AdversarialCorpus::IVAR_CHAIN_DEPTH)
+        )
+        assert_raises(DepthLimitError) { parse(chain) }
+      end
+
+      def parse_class_name_slot_at_ceiling(tail)
+        depth = AdversarialCorpus::USERDEF_NEST_DEPTH
+        blob = AdversarialCorpus.stream(AdversarialCorpus.array_nest(depth) + tail)
+        Parser.new(blob, max_depth: depth + 1).parse
+      end
+
+      def test_object_class_name_slot_is_charged_the_enclosing_depth
+        tail = "o#{AdversarialCorpus.sym(AdversarialCorpus::OBJECT_CLASS)}#{AdversarialCorpus.fixnum(0)}"
+        assert_raises(DepthLimitError, "control failed, so the userdef test proves nothing") do
+          parse_class_name_slot_at_ceiling(tail)
+        end
+      end
+
+      def test_userdef_class_name_slot_does_not_reset_the_depth_budget
+        tail = "u#{AdversarialCorpus.sym(AdversarialCorpus::OBJECT_CLASS)}#{AdversarialCorpus.fixnum(1)}x"
+        assert_raises(DepthLimitError) { parse_class_name_slot_at_ceiling(tail) }
       end
 
       def load_watcher
@@ -288,6 +526,107 @@ module Rube
       def test_never_calls_marshal_load_on_gadget_shaped_payload
         blob = ::Marshal.dump(Gem::Requirement.new(">= 0"))
         refute load_watcher { parse(blob) }, "parser invoked Marshal.load"
+      end
+
+      FIRED = []
+
+      module RecordsHash
+        def hash
+          FIRED << self.class.to_s
+          super
+        end
+      end
+
+      class PlainKey
+        include RecordsHash
+      end
+
+      class StringKey < String
+        include RecordsHash
+      end
+
+      class ArrayKey < Array
+        include RecordsHash
+      end
+
+      StructKey = Struct.new(:a) { include RecordsHash }
+
+      def dispatch_probes
+        {
+          "plain object (o)" => PlainKey.new,
+          "struct (S)" => StructKey.new(1),
+          "Array subclass (C)" => ArrayKey.new,
+          "String subclass (C)" => StringKey.new("x"),
+          "extended object (e)" => PlainKey.new.extend(RecordsHash),
+          "extended string (e)" => (+"x").extend(RecordsHash),
+          "plain string" => "x",
+          "symbol" => :x,
+          "integer" => 7,
+          "regexp" => /ab/
+        }
+      end
+
+      def ruby_dispatches?(key)
+        FIRED.clear
+        ::Marshal.load(::Marshal.dump({ key => nil }))
+        !FIRED.empty?
+      end
+
+      def parser_predicts_dispatch?(key)
+        parse(::Marshal.dump({ key => nil })).dispatching_hash_keys.any?
+      end
+
+      def test_hash_key_dispatch_prediction_matches_real_ruby
+        observed = dispatch_probes.to_h { |label, key| [label, ruby_dispatches?(key)] }
+
+        assert_includes observed.values, true, "no probe dispatched, so the oracle is dead"
+        assert_includes observed.values, false, "every probe dispatched, so the oracle proves nothing"
+
+        mismatches = dispatch_probes.filter_map do |label, key|
+          predicted = parser_predicts_dispatch?(key)
+          next if predicted == observed.fetch(label)
+
+          "#{label}: ruby=#{observed.fetch(label)} parser=#{predicted}"
+        end
+
+        assert_empty mismatches, "parser disagrees with Marshal.load:\n  #{mismatches.join("\n  ")}"
+      end
+
+      def test_the_same_class_is_only_flagged_in_key_position
+        in_key = parse(AdversarialCorpus::HASH_KEY_SHAPES_THAT_DISPATCH[:object])
+        in_value = parse(AdversarialCorpus::OBJECT_IN_VALUE_POSITION)
+
+        assert_equal 1, in_key.dispatching_hash_keys.length
+        assert_empty in_value.dispatching_hash_keys,
+                     "position is the whole signal, so a value-position object must not be flagged"
+      end
+
+      def test_every_dispatching_key_shape_is_detected
+        blind = AdversarialCorpus::HASH_KEY_SHAPES_THAT_DISPATCH.reject do |_shape, bytes|
+          parse(bytes).dispatching_hash_keys.any?
+        end
+
+        assert_empty blind.keys, "key-position dispatch missed in: #{blind.keys.join(', ')}"
+      end
+
+      def test_non_dispatching_key_shapes_are_not_flagged
+        noisy = AdversarialCorpus::HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH.select do |_shape, bytes|
+          parse(bytes).dispatching_hash_keys.any?
+        end
+
+        assert_empty noisy.keys, "false positive on: #{noisy.keys.join(', ')}"
+      end
+
+      def test_struct_member_name_slot_is_not_scanned_as_a_hash_key
+        blob = AdversarialCorpus.stream(
+          "S#{AdversarialCorpus.sym(AdversarialCorpus::OBJECT_CLASS)}" \
+          "#{AdversarialCorpus.fixnum(1)}#{AdversarialCorpus::PLAIN_OBJECT}0"
+        )
+
+        assert_equal 1, parse(blob).nodes.count { |node| node.type == :pair },
+                     "control: the fixture must actually contain a struct pair"
+        assert_empty parse(blob).dispatching_hash_keys,
+                     "read_pair is shared with read_struct, so struct pairs must not be scanned"
       end
 
       class Fixture

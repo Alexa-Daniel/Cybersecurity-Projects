@@ -6,14 +6,14 @@ module Rube
     class Parser
       include Constants
 
-      def initialize(source, max_depth: DEFAULT_MAX_DEPTH, limits: nil)
+      def initialize(source, max_depth: nil, limits: Limits.new)
         raise InputTypeError, "expected String, got #{source.class}" unless source.is_a?(String)
 
         @limits = limits
-        @max_depth = limits ? limits.max_depth : max_depth
+        @max_depth = max_depth || limits.max_depth
         enforce_size(source)
         @source = source.dup.force_encoding(Encoding::BINARY)
-        @budget = Budget.new(limits || Limits.new.permissive)
+        @budget = Budget.new(limits)
         @position = 0
         @symbols = []
         @objects = []
@@ -24,7 +24,7 @@ module Rube
         root = read_value(1)
         raise TrailingBytesError, "#{remaining} unread bytes" unless remaining.zero?
 
-        Result.new(root)
+        Result.new(root, major: @major, minor: @minor)
       end
 
       private
@@ -32,7 +32,6 @@ module Rube
       attr_reader :source, :max_depth, :symbols, :objects, :budget, :limits
 
       def enforce_size(candidate)
-        return unless limits
         return if candidate.bytesize <= limits.max_bytes
 
         raise LimitExceededError, "#{Limits::ROLE_BYTES} #{candidate.bytesize} exceeds #{limits.max_bytes}"
@@ -68,11 +67,10 @@ module Rube
       end
 
       def read_header
-        header = take(HEADER_LENGTH)
-        major, minor = header.unpack("CC")
-        return if major == MAJOR_VERSION && minor <= MINOR_VERSION
+        @major, @minor = take(HEADER_LENGTH).unpack("CC")
+        return if @major == MAJOR_VERSION && @minor <= MINOR_VERSION
 
-        raise UnsupportedVersionError, "stream declares #{major}.#{minor}"
+        raise UnsupportedVersionError, "stream declares #{@major}.#{@minor}"
       end
 
       def read_fixnum
@@ -133,7 +131,7 @@ module Rube
         when TAG_IVAR then read_ivar(tag, depth)
         when TAG_OBJECT then read_object(tag, depth)
         when TAG_STRUCT then read_struct(tag, depth)
-        when TAG_USERDEF then register(read_userdef(tag))
+        when TAG_USERDEF then register(read_userdef(tag, depth))
         when TAG_USERMARSHAL then read_usermarshal(tag, depth)
         when TAG_DATA then read_wrapped(tag, :data, depth)
         when TAG_USERCLASS then read_wrapped(tag, :user_class, depth)
@@ -146,12 +144,16 @@ module Rube
 
       def read_symbol(tag)
         budget.symbol!
-        node = Node.new(type: :symbol, tag: tag, value: read_counted_bytes.to_sym)
+        size = read_count(ROLE_LENGTH)
+        budget.symbol_name!(size)
+        budget.scalar!(size)
+        node = Node.new(type: :symbol, tag: tag, value: take(size).to_sym)
         symbols << node.value
         node
       end
 
       def read_symlink(tag)
+        budget.symbol_reference!
         index = read_fixnum
         raise InvalidLinkError, "symlink #{index} of #{symbols.length}" unless symbols[index] && index >= 0
 
@@ -163,13 +165,20 @@ module Rube
         index = read_fixnum
         raise InvalidLinkError, "object link #{index} of #{objects.length}" unless objects[index] && index >= 0
 
-        Node.new(type: :object_link, tag: tag, value: index)
+        node = Node.new(type: :object_link, tag: tag, value: index)
+        node.link_target = objects[index]
+        node
       end
 
       def read_bignum(tag)
-        negative = take(1) == BIGNUM_SIGN_NEGATIVE
-        magnitude = little_endian(take(read_count(ROLE_BIGNUM) * BIGNUM_WORD_BYTES))
-        Node.new(type: :bignum, tag: tag, value: negative ? -magnitude : magnitude)
+        sign = take(1)
+        raise MalformedValueError, "bignum sign #{sign.inspect}" unless BIGNUM_SIGNS.include?(sign)
+
+        size = read_count(ROLE_BIGNUM) * BIGNUM_WORD_BYTES
+        budget.scalar!(size)
+        magnitude = little_endian(take(size))
+        Node.new(type: :bignum, tag: tag,
+                 value: sign == BIGNUM_SIGN_NEGATIVE ? -magnitude : magnitude)
       end
 
       def read_float(tag)
@@ -210,13 +219,20 @@ module Rube
 
       def read_class_name(node, depth)
         class_node = read_value(depth)
+        unless CLASS_NAME_TYPES.include?(class_node.type)
+          raise MalformedValueError,
+                "class name slot holds #{class_node.type}, not a symbol"
+        end
+
         node.class_name = class_node.value.to_s
         node.auxiliary << class_node
         node
       end
 
       def read_instance_variables(node, depth)
-        read_entry_count(ROLE_IVAR).times do
+        count = read_entry_count(ROLE_IVAR)
+        budget.instance_variables!(count)
+        count.times do
           name = read_value(depth + 1)
           value = read_value(depth + 1)
           node.auxiliary << name
@@ -227,7 +243,7 @@ module Rube
       end
 
       def read_ivar(tag, depth)
-        read_instance_variables(read_value(depth), depth)
+        read_instance_variables(read_value(depth + 1), depth)
       end
 
       def read_object(tag, depth)
@@ -239,13 +255,15 @@ module Rube
       def read_struct(tag, depth)
         node = register(Node.new(type: :struct, tag: tag))
         read_class_name(node, depth + 1)
-        read_entry_count(ROLE_STRUCT).times { node.children << read_pair(depth) }
+        count = read_entry_count(ROLE_STRUCT)
+        budget.struct_members!(count)
+        count.times { node.children << read_pair(depth) }
         node
       end
 
-      def read_userdef(tag)
+      def read_userdef(tag, depth)
         node = Node.new(type: :userdef, tag: tag)
-        read_class_name(node, 1)
+        read_class_name(node, depth + 1)
         node.value = read_counted_bytes
         node
       end
@@ -258,14 +276,18 @@ module Rube
       end
 
       def read_wrapped(tag, type, depth)
-        node = register(Node.new(type: type, tag: tag))
+        node = Node.new(type: type, tag: tag)
+        register(node) if REGISTERED_WRAPPER_TYPES.include?(type)
         read_class_name(node, depth + 1)
         node.children << read_value(depth + 1)
         node
       end
 
       def read_named(tag, type)
-        Node.new(type: type, tag: tag, class_name: read_counted_bytes)
+        size = read_count(ROLE_LENGTH)
+        budget.class_name!(size)
+        budget.scalar!(size)
+        Node.new(type: type, tag: tag, class_name: take(size))
       end
     end
   end

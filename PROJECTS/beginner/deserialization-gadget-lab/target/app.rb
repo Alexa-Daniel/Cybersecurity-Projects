@@ -19,11 +19,15 @@ module Rube
     ALLOWED_CLASSES = %w[Hash String Symbol Integer Array].freeze
     BENIGN_TEMPLATE = "hello"
 
-    REJECTED_SINK = "rejected: payload reaches %s#%s before any allowlist can run"
-    REJECTED_CLASS = "rejected: payload references %s"
+    DETECTOR = Rube::Marshal::BoundaryDetector.new(
+      policy: Rube::Marshal::BoundaryDetector::POLICY_STRICT_ALLOWLIST,
+      allowed_class_names: ALLOWED_CLASSES,
+      limits: Rube::Marshal::Limits.new
+    )
+
+    REJECTED = "rejected: %s"
     RENDERED = "rendered template for %s"
     NO_SESSION = "no session cookie"
-    MALFORMED = "rejected: malformed stream (%s)"
 
     class App < Sinatra::Base
       set :host_authorization, permitted_hosts: []
@@ -63,10 +67,10 @@ module Rube
         blob = decode(request.cookies[COOKIE_NAME])
         halt STATUS_BAD_REQUEST, NO_SESSION unless blob
 
-        verdict = inspect_stream(blob)
-        halt STATUS_BAD_REQUEST, verdict if verdict
+        decision = DETECTOR.inspect_stream(blob)
+        halt STATUS_BAD_REQUEST, format(REJECTED, decision.reason) if decision.rejected?
 
-        compile(::Marshal.load(blob))
+        compile(::Marshal.load(decision.snapshot))
       end
 
       get "/canary" do
@@ -92,20 +96,6 @@ module Rube
         template = state[:template]
         template.def_method(Module.new, "render_it") if template.respond_to?(:def_method)
         format(RENDERED, state[:user])
-      end
-
-      def inspect_stream(blob)
-        result = Rube::Marshal::Parser.new(blob).parse
-
-        sink = result.sinks.first
-        return format(REJECTED_SINK, sink.class_name, sink.sink_method) if sink
-
-        unknown = result.class_names.reject { |name| ALLOWED_CLASSES.include?(name) }
-        return format(REJECTED_CLASS, unknown.join(", ")) unless unknown.empty?
-
-        nil
-      rescue Rube::Marshal::StreamError => e
-        format(MALFORMED, e.class.name.split("::").last)
       end
     end
   end

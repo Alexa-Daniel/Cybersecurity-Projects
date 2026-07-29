@@ -65,10 +65,11 @@ module Rube
         assert_match(/\A#\nend\n/, chain.src)
       end
 
-      def test_serialize_produces_a_loadable_marshal_stream
+      def test_serialize_produces_a_parseable_marshal_stream
         blob = chain.serialize
-        assert_equal 4, blob.getbyte(0)
-        assert_equal 8, blob.getbyte(1)
+        assert_equal [Rube::Marshal::Constants::MAJOR_VERSION, Rube::Marshal::Constants::MINOR_VERSION],
+                     [blob.getbyte(0), blob.getbyte(1)]
+        assert_equal :object, Rube::Marshal::Parser.new(blob).parse.root.type
       end
 
       def test_payload_is_visible_to_the_parser_without_deserializing

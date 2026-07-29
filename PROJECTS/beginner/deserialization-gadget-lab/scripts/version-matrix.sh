@@ -28,12 +28,15 @@ mkdir -p "${HERE}/tmp"
 
 echo "probing ${#IMAGES[@]} images"
 
+incomplete=()
+
 for image in "${IMAGES[@]}"; do
     printf '  %-18s ' "${image}"
 
     if ! docker image inspect "${image}" >/dev/null 2>&1; then
         if ! docker pull -q "${image}" >/dev/null 2>&1; then
             echo "UNAVAILABLE"
+            incomplete+=("${image} unavailable")
             continue
         fi
     fi
@@ -46,11 +49,29 @@ for image in "${IMAGES[@]}"; do
         echo "ok"
     else
         echo "PROBE FAILED"
+        incomplete+=("${image} probe failed")
     fi
 done
 
 echo
+render_status=0
 docker run --rm --network none \
     -v "${OUT}:/matrix.jsonl:ro" \
     -v "${RENDER}:/render.rb:ro" \
-    "${RENDER_IMAGE}" ruby /render.rb /matrix.jsonl
+    -v "${HERE}/lib:/app/lib:ro" \
+    -w /app \
+    "${RENDER_IMAGE}" ruby -Ilib /render.rb /matrix.jsonl || render_status=$?
+
+echo
+if [[ ${#incomplete[@]} -gt 0 ]]; then
+    echo "GATE FAILED - ${#incomplete[@]} of ${#IMAGES[@]} images produced no probe result:"
+    printf '  %s\n' "${incomplete[@]}"
+    echo "  a matrix built from a subset cannot certify a version boundary"
+    exit 1
+fi
+
+if [[ ${render_status} -ne 0 ]]; then
+    echo "GATE FAILED - renderer rejected the matrix"
+fi
+
+exit ${render_status}
