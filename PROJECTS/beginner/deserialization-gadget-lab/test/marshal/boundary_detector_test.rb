@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # boundary_detector_test.rb
+# frozen_string_literal: true
 
 require_relative "../test_helper"
 require_relative "../support/adversarial_corpus"
@@ -11,8 +12,8 @@ module Rube
       CANARY_PATH = "/tmp/rube-canary"
       CANARY_MARKER = "fired"
 
-      def detector(**options)
-        BoundaryDetector.new(**options)
+      def detector(**)
+        BoundaryDetector.new(**)
       end
 
       def benign_blob
@@ -33,7 +34,7 @@ module Rube
       end
 
       def test_accepts_primitive_only_stream_with_an_empty_allowlist
-        assert_predicate detector.inspect_stream(benign_blob), :accepted?
+        assert_predicate detector.inspect_stream(benign_blob), :proceed?
       end
 
       def test_rejects_non_string_input_without_converting_it
@@ -43,45 +44,47 @@ module Rube
         end
 
         decision = detector.inspect_stream(hostile)
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
         assert_equal BoundaryDetector::REASON_INPUT_TYPE, decision.reason
       end
 
       def test_rejects_a_sink_bearing_stream
         decision = detector.inspect_stream(sink_blob)
-        assert_predicate decision, :rejected?
-        assert_includes decision.reason, "Gem::Requirement#marshal_load"
+        assert_predicate decision, :blocked?
+        assert_includes decision.reason, '"Gem::Requirement"#marshal_load',
+                        "the class name is attacker-controlled and stays quoted, so an operator " \
+                        "can see where it starts and stops"
       end
 
       def test_allowlisting_a_class_does_not_exempt_its_sink
         decision = detector(allowed_class_names: %w[Gem::Requirement Gem::Version])
                    .inspect_stream(sink_blob)
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
         assert_includes decision.reason, "marshal_load"
       end
 
       def test_rejects_unapproved_class_names
         decision = detector.inspect_stream(cve_blob)
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
         assert_includes decision.reason, "ERB"
       end
 
       def test_accepts_an_approved_class
         decision = detector(allowed_class_names: %w[ERB]).inspect_stream(cve_blob)
-        assert_predicate decision, :accepted?
+        assert_predicate decision, :proceed?
       end
 
       def test_documented_bypass_is_real_deny_sinks_only_accepts_the_cve_payload
         decision = detector(policy: BoundaryDetector::POLICY_DENY_SINKS_ONLY)
                    .inspect_stream(cve_blob)
-        assert_predicate decision, :accepted?,
+        assert_predicate decision, :proceed?,
                          "the limitation notice claims this bypass exists, so it must be demonstrable"
       end
 
       def test_deny_sinks_only_still_rejects_sinks
         decision = detector(policy: BoundaryDetector::POLICY_DENY_SINKS_ONLY)
                    .inspect_stream(sink_blob)
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
       end
 
       def test_observe_and_log_requires_a_reporter
@@ -90,15 +93,15 @@ module Rube
         end
       end
 
-      def test_observe_and_log_accepts_but_records_the_violation
+      def test_observe_and_log_records_the_violation_without_reporting_proceed
         seen = []
         decision = detector(policy: BoundaryDetector::POLICY_OBSERVE_AND_LOG,
                             reporter: ->(reason) { seen << reason })
                    .inspect_stream(cve_blob)
 
-        assert_predicate decision, :accepted?
         assert_predicate decision, :observed?
-        assert_predicate decision, :would_reject?
+        refute_predicate decision, :proceed?
+        refute_predicate decision, :blocked?
         assert_equal 1, seen.length
       end
 
@@ -106,7 +109,7 @@ module Rube
         decision = detector(policy: BoundaryDetector::POLICY_OBSERVE_AND_LOG,
                             reporter: ->(_) {})
                    .inspect_stream("\x04\x08[\xFA")
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
       end
 
       def test_rejects_a_version_the_parser_accepts_but_no_ruby_emits
@@ -115,18 +118,18 @@ module Rube
         assert_predicate Parser.new(older).parse, :root,
                          "control: the parser must still accept it, it is a forensic tool"
         decision = detector.inspect_stream(older)
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
         assert_includes decision.reason, "4.7"
       end
 
       def test_canonical_version_is_accepted
-        assert_predicate detector.inspect_stream(benign_blob), :accepted?
+        assert_predicate detector.inspect_stream(benign_blob), :proceed?
       end
 
       def test_deny_sinks_only_does_not_police_the_version
         decision = detector(policy: BoundaryDetector::POLICY_DENY_SINKS_ONLY)
                    .inspect_stream("\x04\x07\x30".b)
-        assert_predicate decision, :accepted?,
+        assert_predicate decision, :proceed?,
                          "version canonicality runs no code during load, so it belongs with " \
                          "the allowlist, not with the sink checks"
       end
@@ -137,7 +140,7 @@ module Rube
 
       def test_rejects_malformed_stream_with_a_named_reason
         decision = detector.inspect_stream("\x04\x08[\xFA")
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
         assert_includes decision.reason, "MalformedCountError"
       end
 
@@ -154,12 +157,12 @@ module Rube
       end
 
       def assert_ceiling_rejects(blob, error_name, allowed: [], **narrow)
-        assert_predicate detector(allowed_class_names: allowed).inspect_stream(blob), :accepted?,
+        assert_predicate detector(allowed_class_names: allowed).inspect_stream(blob), :proceed?,
                          "control: this payload must be accepted under default limits, " \
                          "or the ceiling is not what rejected it"
 
         decision = detector(allowed_class_names: allowed, limits: Limits.new(**narrow)).inspect_stream(blob)
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
         assert_includes decision.reason, error_name
         decision
       end
@@ -172,10 +175,10 @@ module Rube
         deep = "\x04\x08" + ("[\x06" * 80) + "0"
         shallow = "\x04\x08" + ("[\x06" * 8) + "0"
 
-        assert_predicate detector.inspect_stream(shallow), :accepted?,
+        assert_predicate detector.inspect_stream(shallow), :proceed?,
                          "control: nesting inside the ceiling must be accepted"
         decision = detector.inspect_stream(deep)
-        assert_predicate decision, :rejected?
+        assert_predicate decision, :blocked?
         assert_includes decision.reason, "DepthLimitError"
       end
 
@@ -199,7 +202,7 @@ module Rube
         blob = AdversarialCorpus.stream(AdversarialCorpus.bignum("+", words))
         decision = detector.inspect_stream(blob)
 
-        assert_predicate decision, :rejected?,
+        assert_predicate decision, :blocked?,
                          "#{words * AdversarialCorpus::BIGNUM_WORD_BYTES} magnitude bytes must be " \
                          "charged the same budget a string of that size is charged"
         assert_includes decision.reason, "LimitExceededError"
@@ -264,7 +267,7 @@ module Rube
       def test_default_limits_bound_every_axis_without_being_asked
         admitted = default_limit_probes.reject do |_axis, (blob, allowed)|
           decision = detector(allowed_class_names: allowed).inspect_stream(blob)
-          decision.rejected? && decision.reason.include?("LimitExceededError")
+          decision.blocked? && decision.reason.include?("LimitExceededError")
         end
 
         assert_empty admitted.keys,
@@ -273,7 +276,7 @@ module Rube
 
       def test_permissive_limits_admit_what_the_defaults_reject
         admitted = default_limit_probes.count do |_axis, (blob, allowed)|
-          detector(allowed_class_names: allowed, limits: Limits.permissive).inspect_stream(blob).accepted?
+          detector(allowed_class_names: allowed, limits: Limits.permissive).inspect_stream(blob).proceed?
         end
 
         assert_operator admitted, :>, 0,
@@ -302,6 +305,149 @@ module Rube
         end
         tracer.enable { detector.inspect_stream(cve_blob) }
         refute fired
+      end
+
+      def policy_options(policy)
+        return { policy: policy, reporter: ->(_reason) {} } if
+          policy == BoundaryDetector::POLICY_OBSERVE_AND_LOG
+
+        { policy: policy }
+      end
+
+      def decision_per_policy(blob, allowed: [])
+        BoundaryDetector::POLICIES.to_h do |policy|
+          [policy, detector(allowed_class_names: allowed, **policy_options(policy)).inspect_stream(blob)]
+        end
+      end
+
+      def state_matrix_blobs
+        {
+          "benign" => benign_blob,
+          "sink" => sink_blob,
+          "unapproved class" => cve_blob,
+          "malformed" => "\x04\x08[\xFA"
+        }
+      end
+
+      def test_no_policy_reports_proceed_for_a_payload_it_flagged
+        admitted = decision_per_policy(sink_blob).select { |_policy, decision| decision.proceed? }
+
+        assert_empty admitted.keys,
+                     "every policy flags a marshal_load sink, so no policy may report proceed. " \
+                     "Marshal.load(d.snapshot) if d.proceed? would load it under " \
+                     "#{admitted.keys.join(', ')}"
+      end
+
+      def test_control_every_policy_reports_proceed_for_a_benign_payload
+        admitted = decision_per_policy(benign_blob).select { |_policy, decision| decision.proceed? }
+
+        assert_equal BoundaryDetector::POLICIES.length, admitted.length,
+                     "control: a proceed? that is never true would pass the previous test vacuously"
+      end
+
+      def test_exactly_one_state_predicate_holds_for_every_policy_and_payload
+        seen = []
+
+        state_matrix_blobs.each do |name, blob|
+          decision_per_policy(blob).each do |policy, decision|
+            held = BoundaryDetector::Decision::STATE_PREDICATES.select { |predicate| decision.public_send(predicate) }
+            assert_equal 1, held.length,
+                         "#{name} under #{policy} reported #{held.length} states: #{held.join(', ')}"
+            seen.concat(held)
+          end
+        end
+
+        assert_equal BoundaryDetector::Decision::STATE_PREDICATES.sort, seen.uniq.sort,
+                     "control: the matrix must exercise every state, or exclusivity proves nothing"
+      end
+
+      def test_the_ambiguous_accept_predicates_no_longer_exist
+        decision = detector(policy: BoundaryDetector::POLICY_OBSERVE_AND_LOG,
+                            reporter: ->(_reason) {}).inspect_stream(sink_blob)
+
+        %i[accepted? rejected?].each do |ambiguous|
+          refute_respond_to decision, ambiguous,
+                            "#{ambiguous} cannot answer whether this payload may be deserialized, " \
+                            "and a reader who copies it loads a flagged stream"
+        end
+      end
+
+      def test_observe_and_log_still_hands_back_bytes_for_an_explicit_opt_in
+        decision = detector(policy: BoundaryDetector::POLICY_OBSERVE_AND_LOG,
+                            reporter: ->(_reason) {}).inspect_stream(sink_blob)
+
+        assert_predicate decision, :observed?
+        refute_nil decision.snapshot,
+                   "observe-and-log must stay non-blocking, so a caller who writes " \
+                   "proceed? || observed? can still load"
+        assert_equal ::Marshal.load(sink_blob), ::Marshal.load(decision.snapshot)
+      end
+
+      def test_a_blocked_decision_carries_no_snapshot_to_load
+        decision = detector.inspect_stream(sink_blob)
+
+        assert_predicate decision, :blocked?
+        assert_nil decision.snapshot
+      end
+
+      def test_decision_rejects_an_unknown_state
+        assert_raises(ArgumentError) { BoundaryDetector::Decision.new(state: :yolo) }
+      end
+
+      def hostile_named_streams(name)
+        sym = AdversarialCorpus.sym(name)
+        {
+          "unapproved class" => AdversarialCorpus.stream("o#{sym}#{AdversarialCorpus.fixnum(0)}"),
+          "sink" => AdversarialCorpus.stream("U#{sym}#{AdversarialCorpus.fixnum(0)}"),
+          "hash key dispatch" =>
+            AdversarialCorpus.stream(
+              "{#{AdversarialCorpus.fixnum(1)}o#{sym}#{AdversarialCorpus.fixnum(0)}0"
+            )
+        }
+      end
+
+      def test_no_reject_reason_repeats_a_raw_control_byte_from_the_stream
+        forged = "Evil\r\n2026-07-29 INFO session validated user=admin\e[0m\x00"
+        raw = hostile_named_streams(forged).transform_values do |blob|
+          detector.inspect_stream(blob).reason.to_s
+        end
+
+        assert_equal 3, raw.values.count { |reason| !reason.empty? },
+                     "control: every reason kind must actually fire, or this proves nothing"
+        raw.each do |kind, reason|
+          offending = reason.bytes.select { |byte| byte < 0x20 }
+          assert_empty offending,
+                       "#{kind} reason carried raw control bytes #{offending.inspect} straight " \
+                       "into a caller-supplied logger"
+        end
+      end
+
+      def test_a_reject_reason_still_identifies_the_class_it_refused
+        blob = hostile_named_streams("Evil\nInjected").fetch("unapproved class")
+
+        assert_includes detector.inspect_stream(blob).reason, 'Evil\nInjected',
+                        "escaping must not cost the operator the name that was refused"
+      end
+
+      def test_a_reject_reason_bounds_how_much_attacker_text_it_repeats
+        ceiling = Limits::DEFAULT_MAX_CLASS_NAME_BYTES
+        long = "A" * ceiling
+        blob = hostile_named_streams(long).fetch("unapproved class")
+        decision = detector.inspect_stream(blob)
+
+        assert_predicate decision, :blocked?
+        assert_includes decision.reason, BoundaryDetector::REASON_TRUNCATED_MARKER
+        assert_operator decision.reason.bytesize, :<, ceiling,
+                        "a 1 KiB class name is inside the parser ceiling, so the reason is the " \
+                        "only thing bounding what reaches the log"
+      end
+
+      def test_control_a_short_class_name_is_not_truncated
+        blob = hostile_named_streams("Evil").fetch("unapproved class")
+        reason = detector.inspect_stream(blob).reason
+
+        assert_includes reason, '"Evil"'
+        refute_includes reason, BoundaryDetector::REASON_TRUNCATED_MARKER
       end
     end
   end

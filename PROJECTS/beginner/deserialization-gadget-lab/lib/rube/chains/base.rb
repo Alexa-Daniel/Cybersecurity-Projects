@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # base.rb
+# frozen_string_literal: true
 
 module Rube
   module Chains
@@ -8,7 +9,6 @@ module Rube
     class NotImplementedByChainError < ChainError; end
 
     class Base
-      NAMESPACE_SEPARATOR = "::"
       SUBCLASS_MUST_DEFINE = "chain must define"
 
       class << self

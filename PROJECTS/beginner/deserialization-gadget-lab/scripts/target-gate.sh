@@ -114,6 +114,58 @@ else
 fi
 
 echo
+encode() {
+    docker run --rm --network none ruby:4.0-slim \
+        ruby -e "require \"base64\"; print Base64.strict_encode64(Marshal.dump($1))"
+}
+
+for root in '"plain string"' 'nil' '[1, 2]' '{ user: "x" }'; do
+    body_file="$(mktemp)"
+    code="$(curl -s -o "${body_file}" -w '%{http_code}' \
+        -H "Cookie: session_state=$(encode "${root}")" "${BASE}/render/safe")"
+    body="$(head -c 80 "${body_file}")"
+    rm -f "${body_file}"
+    echo "  defended on root ${root} : HTTP ${code} ${body}"
+    if [[ "${code}" == "500" ]]; then
+        echo "  FAIL   the defence accepted this root and then crashed compiling it"
+        failures=$((failures + 1))
+    fi
+done
+
+echo
+leak_file="$(mktemp)"
+curl -s -o "${leak_file}" -H "Cookie: session_state=$(encode 'nil')" "${BASE}/render/safe"
+curl -s -o "${leak_file}.v" -H "Cookie: session_state=$(encode 'nil')" "${BASE}/render"
+if grep -qE "app\.rb|/app/lib|rube/marshal" "${leak_file}" "${leak_file}.v"; then
+    echo "  FAIL   an error response leaked source paths or source lines"
+    failures=$((failures + 1))
+else
+    echo "  PASS   error responses leak no source path or source line"
+fi
+rm -f "${leak_file}" "${leak_file}.v"
+
+echo
+class_named() {
+    docker run --rm --network none ruby:4.0-slim ruby -e "
+require \"base64\"
+def sym(n) = \":\" + (n.bytesize + 5).chr + n
+def str(s) = %q(\") + (s.bytesize + 5).chr + s
+print Base64.strict_encode64($1)
+"
+}
+
+for probe in 'Marshal.dump(Object.new)' '("\x04\x08C" + sym("String") + str("hi")).b'; do
+    named_body="$(curl -s -H "Cookie: session_state=$(class_named "${probe}")" "${BASE}/render/safe")"
+    echo "  class-named stream  : ${named_body}"
+    if [[ "${named_body}" == *"unapproved class"* ]]; then
+        echo "  PASS   refused on the class name itself, not on a parse error"
+    else
+        echo "  FAIL   PERMITTED_CLASS_NAMES admitted a class name, or something else rejected it first"
+        failures=$((failures + 1))
+    fi
+done
+
+echo
 sinks="$(docker run --rm --network none -v "${HERE}/lib:/app/lib:ro" -w /app ruby:4.0-slim \
     ruby -Ilib -e '
 require "rube"

@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # matrix_probe.rb
+# frozen_string_literal: true
 
 require "json"
 

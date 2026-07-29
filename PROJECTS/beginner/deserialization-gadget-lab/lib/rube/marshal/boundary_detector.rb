@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # boundary_detector.rb
+# frozen_string_literal: true
 
 module Rube
   module Marshal
@@ -12,8 +13,6 @@ module Rube
 
       POLICIES = [POLICY_STRICT_ALLOWLIST, POLICY_DENY_SINKS_ONLY, POLICY_OBSERVE_AND_LOG].freeze
 
-      PRIMITIVE_CLASS_NAMES = %w[].freeze
-
       REASON_INPUT_TYPE = "input is not a String"
       REASON_MALFORMED = "stream is not canonical Marshal: %s"
       REASON_SINK = "stream reaches %s#%s during load, before any allowlist can run"
@@ -23,7 +22,14 @@ module Rube
       REASON_NONCANONICAL_VERSION = "stream declares Marshal %d.%d; every Ruby that can produce " \
                                     "this format emits %d.%d"
 
-      LIMITATION_NOTICE = <<~NOTICE.freeze
+      REASON_MAX_NAME_BYTES = 96
+      REASON_MAX_NAMES = 8
+      REASON_TRUNCATED_MARKER = "[truncated"
+      REASON_TRUNCATED = "#{REASON_TRUNCATED_MARKER}, +%d bytes]".freeze
+      REASON_ELIDED_NAMES = ", and %d more"
+      REASON_NAME_SEPARATOR = ", "
+
+      LIMITATION_NOTICE = <<~NOTICE
         SECURITY LIMITATION
 
         Rube::Marshal::BoundaryDetector examines a bounded snapshot of Marshal bytes and
@@ -44,31 +50,36 @@ module Rube
       NOTICE
 
       class Decision
-        attr_reader :reason, :snapshot, :result
+        STATE_PROCEED = :proceed
+        STATE_BLOCKED = :blocked
+        STATE_OBSERVED = :observed
 
-        def initialize(accepted:, reason: nil, snapshot: nil, result: nil, observed: false, would_reject: false)
-          @accepted = accepted
+        STATES = [STATE_PROCEED, STATE_BLOCKED, STATE_OBSERVED].freeze
+        STATE_PREDICATES = %i[proceed? blocked? observed?].freeze
+
+        UNKNOWN_STATE = "unknown decision state %p, expected one of %s"
+
+        attr_reader :state, :reason, :snapshot, :result
+
+        def initialize(state:, reason: nil, snapshot: nil, result: nil)
+          raise ArgumentError, format(UNKNOWN_STATE, state, STATES.join(", ")) unless STATES.include?(state)
+
+          @state = state
           @reason = reason
           @snapshot = snapshot
           @result = result
-          @observed = observed
-          @would_reject = would_reject
         end
 
-        def accepted?
-          @accepted
+        def proceed?
+          state == STATE_PROCEED
         end
 
-        def rejected?
-          !@accepted
+        def blocked?
+          state == STATE_BLOCKED
         end
 
         def observed?
-          @observed
-        end
-
-        def would_reject?
-          @would_reject
+          state == STATE_OBSERVED
         end
       end
 
@@ -106,12 +117,28 @@ module Rube
         reject(violation)
       end
 
+      def quoted(name)
+        raw = name.to_s.dup.force_encoding(Encoding::BINARY)
+        return raw.inspect if raw.bytesize <= REASON_MAX_NAME_BYTES
+
+        "#{raw.byteslice(0, REASON_MAX_NAME_BYTES).inspect}" \
+          "#{format(REASON_TRUNCATED, raw.bytesize - REASON_MAX_NAME_BYTES)}"
+      end
+
+      def quoted_list(names)
+        shown = names.first(REASON_MAX_NAMES).map { |name| quoted(name) }.join(REASON_NAME_SEPARATOR)
+        elided = names.length - REASON_MAX_NAMES
+        return shown unless elided.positive?
+
+        "#{shown}#{format(REASON_ELIDED_NAMES, elided)}"
+      end
+
       def violation_for(result)
         sink = result.sinks.first
-        return format(REASON_SINK, sink.class_name, sink.sink_method) if sink
+        return format(REASON_SINK, quoted(sink.class_name), sink.sink_method) if sink
 
         key = result.dispatching_hash_keys.first
-        return format(REASON_KEY_DISPATCH, key.effective_class_name) if key
+        return format(REASON_KEY_DISPATCH, quoted(key.effective_class_name)) if key
 
         return nil if policy == POLICY_DENY_SINKS_ONLY
 
@@ -121,23 +148,23 @@ module Rube
         end
 
         unapproved = result.class_names.reject { |name| allowed_class_names.include?(name) }
-        return format(REASON_UNAPPROVED, unapproved.join(", ")) unless unapproved.empty?
+        return format(REASON_UNAPPROVED, quoted_list(unapproved)) unless unapproved.empty?
 
         nil
       end
 
       def observe(violation, snapshot, result)
         reporter.call(violation)
-        Decision.new(accepted: true, reason: violation, snapshot: snapshot,
-                     result: result, observed: true, would_reject: true)
+        Decision.new(state: Decision::STATE_OBSERVED, reason: violation,
+                     snapshot: snapshot, result: result)
       end
 
       def accept(snapshot, result)
-        Decision.new(accepted: true, snapshot: snapshot, result: result)
+        Decision.new(state: Decision::STATE_PROCEED, snapshot: snapshot, result: result)
       end
 
       def reject(reason)
-        Decision.new(accepted: false, reason: reason)
+        Decision.new(state: Decision::STATE_BLOCKED, reason: reason)
       end
     end
   end

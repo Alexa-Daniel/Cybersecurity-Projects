@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # node.rb
+# frozen_string_literal: true
 
 module Rube
   module Marshal
@@ -7,17 +8,22 @@ module Rube
       STRING_BACKED_TYPES = %i[string regexp].freeze
       WRAPPER_TYPES = %i[user_class extended].freeze
 
-      attr_reader :type, :tag, :children, :instance_variables_map, :auxiliary
+      attr_reader :type, :tag, :children, :instance_variables_map, :auxiliary, :undecoded_tail
       attr_accessor :value, :class_name, :link_target
 
-      def initialize(type:, tag: nil, value: nil, class_name: nil)
+      def initialize(type:, tag: nil, value: nil, class_name: nil, undecoded_tail: nil)
         @type = type
         @tag = tag
         @value = value
         @class_name = class_name
+        @undecoded_tail = undecoded_tail
         @children = []
         @instance_variables_map = {}
         @auxiliary = []
+      end
+
+      def fully_decoded?
+        undecoded_tail.nil?
       end
 
       def sink?
@@ -57,6 +63,16 @@ module Rube
         yield self
         children.each { |child| child.each(&block) }
         auxiliary.each { |child| child.each(&block) }
+      end
+
+      def seal
+        value.freeze
+        class_name.freeze
+        undecoded_tail.freeze
+        children.freeze
+        auxiliary.freeze
+        instance_variables_map.freeze
+        freeze
       end
     end
 

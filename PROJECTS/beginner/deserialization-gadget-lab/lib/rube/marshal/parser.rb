@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # parser.rb
+# frozen_string_literal: true
 
 module Rube
   module Marshal
@@ -24,7 +25,8 @@ module Rube
         root = read_value(1)
         raise TrailingBytesError, "#{remaining} unread bytes" unless remaining.zero?
 
-        Result.new(root, major: @major, minor: @minor)
+        root.each(&:seal)
+        Result.new(root, major: @major, minor: @minor).freeze
       end
 
       private
@@ -80,8 +82,6 @@ module Rube
         return marker + FIXNUM_INLINE_OFFSET if marker < FIXNUM_MIN_INLINE
 
         width = marker.abs
-        raise TruncatedStreamError, "fixnum width #{width}" if width > FIXNUM_MAX_WIDTH
-
         value = little_endian(take(width))
         marker.negative? ? value - (1 << (BITS_PER_BYTE * width)) : value
       end
@@ -155,7 +155,8 @@ module Rube
       def read_symlink(tag)
         budget.symbol_reference!
         index = read_fixnum
-        raise InvalidLinkError, "symlink #{index} of #{symbols.length}" unless symbols[index] && index >= 0
+        raise InvalidLinkError, "symlink #{index} of #{symbols.length}" if
+          index.negative? || index >= symbols.length
 
         Node.new(type: :symlink, tag: tag, value: symbols[index])
       end
@@ -163,7 +164,8 @@ module Rube
       def read_object_link(tag)
         budget.link!
         index = read_fixnum
-        raise InvalidLinkError, "object link #{index} of #{objects.length}" unless objects[index] && index >= 0
+        raise InvalidLinkError, "object link #{index} of #{objects.length}" if
+          index.negative? || index >= objects.length
 
         node = Node.new(type: :object_link, tag: tag, value: index)
         node.link_target = objects[index]
@@ -182,9 +184,8 @@ module Rube
       end
 
       def read_float(tag)
-        Node.new(type: :float, tag: tag, value: Float(read_counted_bytes))
-      rescue ArgumentError
-        Node.new(type: :float, tag: tag)
+        value, tail = FloatBody.decode(read_counted_bytes)
+        Node.new(type: :float, tag: tag, value: value, undecoded_tail: tail)
       end
 
       def read_string(tag)
@@ -242,7 +243,7 @@ module Rube
         node
       end
 
-      def read_ivar(tag, depth)
+      def read_ivar(_tag, depth)
         read_instance_variables(read_value(depth + 1), depth)
       end
 

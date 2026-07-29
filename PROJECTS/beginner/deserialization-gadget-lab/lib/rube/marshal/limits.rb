@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # limits.rb
+# frozen_string_literal: true
 
 module Rube
   module Marshal

@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # scanner.rb
+# frozen_string_literal: true
 
 module Rube
   class Scanner
@@ -19,6 +20,23 @@ module Rube
 
     LOCATION_SEPARATOR = ":"
     UNKNOWN_LOCATION = nil
+
+    STATE_UNREADABLE = :unreadable
+    STATE_UNANALYSABLE = :unanalysable
+    STATE_VERDICTS = [true, false].freeze
+
+    SITE_MODULE_NAME = :module_name
+    SITE_OWN_METHODS = :own_methods
+    SITE_CANDIDATE = :candidate
+    SITE_SOURCE_PARSE = :source_parse
+    SITE_STATE_ANALYSIS = :state_analysis
+
+    SITES = [SITE_MODULE_NAME, SITE_OWN_METHODS, SITE_CANDIDATE,
+             SITE_SOURCE_PARSE, SITE_STATE_ANALYSIS].freeze
+
+    LOSSY_SITES = [SITE_MODULE_NAME, SITE_OWN_METHODS, SITE_CANDIDATE].freeze
+
+    SUBJECT_UNNAMED = "(module that cannot report a name)"
 
     class Candidate
       attr_reader :class_name, :method_name, :gate, :source_location, :arity
@@ -46,13 +64,26 @@ module Rube
       end
 
       def touches_state?
-        @touches_state
+        @touches_state == true
+      end
+
+      def state_known?
+        STATE_VERDICTS.include?(@touches_state)
+      end
+
+      def unanalysable?
+        @touches_state == STATE_UNANALYSABLE
+      end
+
+      def unreadable_source?
+        @touches_state == STATE_UNREADABLE
       end
 
       def reachable?
         return true if gated?
+        return false unless zero_arity?
 
-        zero_arity? && touches_state?
+        touches_state? || unreadable_source?
       end
 
       def to_s
@@ -60,12 +91,57 @@ module Rube
       end
     end
 
-    class Report
-      attr_reader :candidates, :scanned_modules
+    class Suppression
+      attr_reader :site, :subject, :error_class
 
-      def initialize(candidates, scanned_modules)
+      def initialize(site:, subject:, error_class:)
+        @site = site
+        @subject = subject
+        @error_class = error_class
+      end
+
+      def lossy?
+        LOSSY_SITES.include?(site)
+      end
+
+      def to_s
+        "#{site} #{subject} (#{error_class})"
+      end
+    end
+
+    class Report
+      attr_reader :candidates, :scanned_modules, :suppressions
+
+      def initialize(candidates, scanned_modules, suppressions)
         @candidates = candidates
         @scanned_modules = scanned_modules
+        @suppressions = suppressions
+      end
+
+      def suppressed_count
+        suppressions.length
+      end
+
+      def suppressions_by_site
+        suppressions.each_with_object({}) do |suppression, counts|
+          counts[suppression.site] = counts.fetch(suppression.site, 0) + 1
+        end
+      end
+
+      def complete?
+        suppressions.empty?
+      end
+
+      def candidates_lost?
+        suppressions.any?(&:lossy?)
+      end
+
+      def unanalysable
+        candidates.select(&:unanalysable?)
+      end
+
+      def fully_analysed?
+        candidates.all?(&:state_known?)
       end
 
       def gated
@@ -90,6 +166,7 @@ module Rube
       @candidates = []
       @definition_cache = {}
       @scanned_modules = 0
+      @suppressions = []
     end
 
     def scan
@@ -99,12 +176,16 @@ module Rube
         collect_singleton_methods(mod, name)
       end
 
-      Report.new(@candidates.sort_by(&:to_s), @scanned_modules)
+      Report.new(@candidates.sort_by(&:to_s), @scanned_modules, @suppressions.freeze)
     end
 
     private
 
     attr_reader :namespace
+
+    def suppress(site, subject, error)
+      @suppressions << Suppression.new(site: site, subject: subject, error_class: error.class.name)
+    end
 
     def each_named_module
       ObjectSpace.each_object(Module) do |mod|
@@ -119,7 +200,8 @@ module Rube
     def safe_name(mod)
       name = mod.name
       name if name.is_a?(String) && !name.empty?
-    rescue StandardError
+    rescue StandardError => e
+      suppress(SITE_MODULE_NAME, SUBJECT_UNNAMED, e)
       nil
     end
 
@@ -128,7 +210,7 @@ module Rube
     end
 
     def collect_instance_methods(mod, name)
-      own = own_instance_methods(mod)
+      own = own_instance_methods(mod, name)
 
       (own & GATED_METHODS).each do |method_name|
         record(mod, name, method_name, GATE_GATED, singleton: false)
@@ -147,10 +229,15 @@ module Rube
       end
     end
 
-    def own_instance_methods(mod)
+    def own_instance_methods(mod, name)
       (mod.instance_methods(false) + mod.private_instance_methods(false)).map(&:to_s)
-    rescue StandardError
+    rescue StandardError => e
+      suppress(SITE_OWN_METHODS, name, e)
       []
+    end
+
+    def qualified(name, method_name, singleton)
+      "#{name}#{singleton ? '.' : '#'}#{method_name}"
     end
 
     def record(mod, name, method_name, gate, singleton:)
@@ -163,9 +250,10 @@ module Rube
         source_location: format_location(handle.source_location),
         arity: handle.arity,
         singleton: singleton,
-        touches_state: touches_state?(handle)
+        touches_state: state_reference_in(handle, qualified(name, method_name, singleton))
       )
-    rescue StandardError, ScriptError
+    rescue StandardError, ScriptError => e
+      suppress(SITE_CANDIDATE, qualified(name, method_name, singleton), e)
       nil
     end
 
@@ -175,32 +263,37 @@ module Rube
       location.join(LOCATION_SEPARATOR)
     end
 
-    def touches_state?(handle)
-      return false unless PRISM_AVAILABLE
+    def state_reference_in(handle, subject)
+      return STATE_UNANALYSABLE unless PRISM_AVAILABLE
 
       path, line = handle.source_location
-      return false unless path && line
+      return STATE_UNANALYSABLE unless path && line
 
-      node = definition_at(path, line)
-      return false unless node
+      definitions = definitions_for(path)
+      return STATE_UNREADABLE unless definitions
+
+      node = definitions[line]
+      return STATE_UNREADABLE unless node
 
       node.compact_child_nodes.any? { |child| state_reference?(child) }
-    rescue StandardError, ScriptError
-      false
-    end
-
-    def definition_at(path, line)
-      definitions_for(path)[line]
+    rescue StandardError, ScriptError => e
+      suppress(SITE_STATE_ANALYSIS, subject, e)
+      STATE_UNREADABLE
     end
 
     def definitions_for(path)
-      @definition_cache[path] ||= begin
-        found = {}
-        collect_definitions(Prism.parse_file(path).value, found)
-        found
-      rescue StandardError, ScriptError
-        {}
-      end
+      return @definition_cache[path] if @definition_cache.key?(path)
+
+      @definition_cache[path] = parse_definitions(path)
+    end
+
+    def parse_definitions(path)
+      found = {}
+      collect_definitions(Prism.parse_file(path).value, found)
+      found
+    rescue StandardError, ScriptError => e
+      suppress(SITE_SOURCE_PARSE, path, e)
+      nil
     end
 
     def collect_definitions(node, found)

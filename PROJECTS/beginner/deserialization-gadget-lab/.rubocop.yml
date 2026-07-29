@@ -11,20 +11,40 @@ AllCops:
   TargetRubyVersion: 3.3
   Exclude:
     - "vendor/**/*"
-    - "target/**/*"
     - "docs/**/*"
 
 Style/Documentation:
   Enabled: false
 
-Style/FrozenStringLiteralComment:
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: single_quotes
+
+Style/FormatStringToken:
   Enabled: false
+
+Style/RedundantFormat:
+  Enabled: false
+
+Style/StringConcatenation:
+  Enabled: false
+
+Security/MarshalLoad:
+  Enabled: false
+
+Minitest/EmptyLineBeforeAssertionMethods:
+  Enabled: false
+
+Minitest/MultipleAssertions:
+  Max: 12
 
 Metrics/MethodLength:
   Max: 30
 
 Metrics/AbcSize:
-  Max: 30
+  Max: 50
 
 Metrics/CyclomaticComplexity:
   Max: 30
@@ -32,8 +52,47 @@ Metrics/CyclomaticComplexity:
 Metrics/PerceivedComplexity:
   Max: 30
 
+Metrics/ParameterLists:
+  CountKeywordArgs: false
+
 Metrics/ClassLength:
   Max: 250
+  Exclude:
+    - "test/**/*"
+
+Metrics/ModuleLength:
+  Exclude:
+    - "test/**/*"
 
 Layout/LineLength:
   Max: 120
+
+Lint/RescueException:
+  Exclude:
+    - "test/**/*"
+
+Lint/EmptyClass:
+  Exclude:
+    - "test/**/*"
+
+Lint/UselessMethodDefinition:
+  Exclude:
+    - "test/**/*"
+
+Style/MutableConstant:
+  Exclude:
+    - "test/**/*"
+
+Minitest/AssertTruthy:
+  Enabled: false
+
+Minitest/RefuteFalse:
+  Enabled: false
+
+Style/EvalWithLocation:
+  Exclude:
+    - "test/**/*"
+
+Style/OptionalBooleanParameter:
+  Exclude:
+    - "test/**/*"

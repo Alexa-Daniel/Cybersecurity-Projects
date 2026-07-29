@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # constants.rb
+# frozen_string_literal: true
 
 module Rube
   module Marshal
@@ -33,6 +34,16 @@ module Rube
       TAG_STRUCT = "S"
       TAG_DATA = "d"
       TAG_IVAR = "I"
+
+      NUL_BYTE = "\x00"
+
+      FLOAT_NAN = "nan"
+      FLOAT_INFINITY = "inf"
+      FLOAT_NEGATIVE_INFINITY = "-inf"
+
+      FLOAT_LEADING_SPACE = "[ \t\n\v\f\r]*"
+      FLOAT_HEX_PREFIX = /\A#{FLOAT_LEADING_SPACE}[+-]?0[xX](?:\h+(?:\.\h*)?|\.\h+)(?:[pP][+-]?\d+)?/
+      FLOAT_DECIMAL_PREFIX = /\A#{FLOAT_LEADING_SPACE}[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/
 
       BIGNUM_SIGN_POSITIVE = "+"
       BIGNUM_SIGN_NEGATIVE = "-"
@@ -69,7 +80,7 @@ module Rube
         TAG_DATA => "_load_data"
       }.freeze
 
-      GATED_SINK_TAGS = [TAG_USERDEF, TAG_USERMARSHAL].freeze
+      GATED_SINK_TAGS = [TAG_USERDEF, TAG_USERMARSHAL, TAG_DATA].freeze
     end
   end
 end

@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # parser_test.rb
+# frozen_string_literal: true
 
 require_relative "../test_helper"
 require_relative "../support/adversarial_corpus"
@@ -139,7 +140,7 @@ module Rube
       end
 
       def test_parses_bignum_both_signs
-        [2**64, -(2**64), 2**128 + 7].each do |n|
+        [2**64, -(2**64), (2**128) + 7].each do |n|
           assert_equal n, roundtrip(n).value, "bignum #{n} did not round-trip"
         end
       end
@@ -276,7 +277,7 @@ module Rube
       end
 
       def test_resolves_symlink_to_prior_symbol
-        node = roundtrip([:same, :same])
+        node = roundtrip(%i[same same])
         assert_equal :symlink, node.children.last.type
         assert_equal :same, node.children.last.value
       end
@@ -399,7 +400,7 @@ module Rube
       def test_sink_in_an_instance_variable_name_position_is_still_reported
         result = parse("\x04\x08I\"\x06a\x06u:\x09Evil\x06x0")
         assert_includes result.class_names, "Evil"
-        assert_equal ["Evil#_load"], result.sinks.map { |s| "#{s.class_name}##{s.sink_method}" }
+        assert_equal(["Evil#_load"], result.sinks.map { |s| "#{s.class_name}##{s.sink_method}" })
       end
 
       def tripwires(blob)
@@ -504,12 +505,12 @@ module Rube
         assert_raises(DepthLimitError) { parse_class_name_slot_at_ceiling(tail) }
       end
 
-      def load_watcher
+      def load_watcher(&)
         fired = false
         tracer = TracePoint.new(:call, :c_call) do |tp|
           fired = true if tp.method_id == :load && tp.self.equal?(::Marshal)
         end
-        tracer.enable { yield }
+        tracer.enable(&)
         fired
       end
 
@@ -639,6 +640,164 @@ module Rube
         def initialize
           @marker = "value"
         end
+      end
+
+      def nested_result
+        parse(::Marshal.dump({ "user" => "guest", "roles" => [1, 2, 3], "on" => true }))
+      end
+
+      def test_a_returned_parse_graph_cannot_be_mutated_by_its_consumer
+        result = nested_result
+        node = result.root
+
+        assert_raises(FrozenError) { node.children << Node.new(type: :nil) }
+        assert_raises(FrozenError) { node.auxiliary.clear }
+        assert_raises(FrozenError) { node.instance_variables_map[:injected] = Node.new(type: :nil) }
+      end
+
+      def test_a_returned_node_cannot_have_its_verdict_fields_rewritten
+        node = nested_result.root
+
+        assert_raises(FrozenError) { node.value = "rewritten" }
+        assert_raises(FrozenError) { node.class_name = "Innocuous" }
+      end
+
+      def test_every_node_in_the_graph_is_frozen_not_just_the_root
+        unfrozen = nested_result.nodes.reject(&:frozen?)
+
+        assert_empty unfrozen.map(&:type)
+        assert_operator nested_result.nodes.count, :>, 5,
+                        "control: a one-node graph would not prove the walk reaches children"
+      end
+
+      def test_scalar_values_in_the_graph_are_frozen_too
+        strings = nested_result.nodes.filter_map { |n| n.value if n.value.is_a?(String) }
+
+        refute_empty strings, "control: the probe must contain string values"
+        assert(strings.all?(&:frozen?))
+      end
+
+      def test_the_chain_registry_cannot_be_appended_to_by_a_caller
+        assert_raises(FrozenError) { Rube::Chains.registry << Object }
+      end
+
+      def test_control_the_registry_still_reports_its_chains
+        refute_empty Rube::Chains.all
+        assert_includes Rube::Chains.all, Rube::Chains::ErbDefMethod
+      end
+
+      FIXNUM_WIDTH_PROBES = [
+        0, 1, -1, 122, -123, 123, -124, 255, -256, 256, -257, 65_535, -65_536,
+        65_536, 16_777_215, -16_777_216, 16_777_216, 1_073_741_823, -1_073_741_824
+      ].freeze
+
+      def test_fixnum_round_trips_every_width_the_format_allows
+        mismatched = FIXNUM_WIDTH_PROBES.reject { |n| parse(::Marshal.dump(n)).root.value == n }
+
+        assert_empty mismatched.map(&:inspect)
+      end
+
+      def test_no_fixnum_marker_can_request_a_width_beyond_the_format_ceiling
+        payloads = FIXNUM_WIDTH_PROBES.map { |n| ::Marshal.dump(n).bytesize - Constants::HEADER_LENGTH - 2 }
+
+        assert_equal (0..Constants::FIXNUM_MAX_WIDTH).to_a, payloads.uniq.sort,
+                     "control: the probe set must exercise the inline form and every width"
+        assert_operator payloads.max, :<=, Constants::FIXNUM_MAX_WIDTH,
+                        "the format cannot express a wider fixnum, so a runtime width guard " \
+                        "is unreachable and must not pretend otherwise"
+      end
+
+      def float_stream(body)
+        AdversarialCorpus.stream("f#{AdversarialCorpus.fixnum(body.bytesize)}#{body}")
+      end
+
+      def float_value(body)
+        parse(float_stream(body)).root.value
+      end
+
+      def marshal_float(body)
+        ::Marshal.load(float_stream(body))
+      end
+
+      def same_float?(left, right)
+        return false unless left.is_a?(Float) && right.is_a?(Float)
+
+        (left.nan? && right.nan?) || left == right
+      end
+
+      EMITTED_FLOAT_BODIES = [
+        "inf", "-inf", "nan", "0", "-0", "1.5", "-2.5", "1e400", "-1e400",
+        "0.0001", "3.141592653589793", "1.7976931348623157e+308", "5.0e-324"
+      ].freeze
+
+      HAND_BUILT_FLOAT_BODIES = [
+        "1_0", "abc", "", " 1.5", "0x10", "1.5abc", "+2.5", ".5",
+        "nan\x00j", "inf\x00x", "INF", "NaN"
+      ].freeze
+
+      def test_float_decoding_agrees_with_marshal_load_on_every_body
+        bodies = EMITTED_FLOAT_BODIES + HAND_BUILT_FLOAT_BODIES
+        disagreements = bodies.reject { |b| same_float?(float_value(b), marshal_float(b)) }
+
+        assert_empty(disagreements.map { |b| "#{b.inspect}: #{float_value(b).inspect} vs #{marshal_float(b).inspect}" })
+
+        observed = bodies.map { |b| marshal_float(b) }
+        assert(observed.any?(&:nan?), "control: the table must exercise nan")
+        assert(observed.any?(&:infinite?), "control: the table must exercise infinity")
+        assert(observed.any?(&:finite?), "control: the table must exercise finite values")
+      end
+
+      def test_float_never_reports_nil_for_a_body_marshal_load_accepts
+        blind = (EMITTED_FLOAT_BODIES + HAND_BUILT_FLOAT_BODIES).select { |b| float_value(b).nil? }
+
+        assert_empty blind,
+                     "a nil value is indistinguishable from a float of zero and hides what the " \
+                     "stream actually carried"
+      end
+
+      def test_every_float_ruby_dumps_round_trips_through_the_parser
+        values = [0.0, -0.0, 1.5, -2.5, 1e308, 1e-308, 0.1, Float::INFINITY,
+                  -Float::INFINITY, Float::NAN, Float::MAX, Float::MIN]
+        mismatched = values.reject do |v|
+          same_float?(parse(::Marshal.dump(v)).root.value, v)
+        end
+
+        assert_empty mismatched.map(&:inspect)
+      end
+
+      def test_a_legacy_mantissa_tail_is_preserved_rather_than_guessed
+        node = parse(float_stream("3.5\x00junk")).root
+
+        assert_in_delta 3.5, node.value, 0.0
+        assert_equal "\x00junk".b, node.undecoded_tail
+        refute_predicate node, :fully_decoded?
+      end
+
+      def test_control_a_float_ruby_actually_emits_is_fully_decoded
+        node = parse(::Marshal.dump(3.5)).root
+
+        assert_predicate node, :fully_decoded?
+        assert_nil node.undecoded_tail
+      end
+
+      def test_the_parser_and_the_scanner_agree_on_which_sinks_are_gated
+        from_tags = Constants::GATED_SINK_TAGS.map { |tag| Constants::SINK_METHODS.fetch(tag) }
+        from_scanner = Rube::Scanner::GATED_METHODS + Rube::Scanner::GATED_SINGLETON_METHODS
+
+        refute_empty from_tags, "control: an empty gated set would make this vacuous"
+        assert_equal from_scanner.sort, from_tags.sort,
+                     "a sink method gated in one half and ungated in the other is a contradiction, " \
+                     "and the two halves are the only two definitions of gated in this project"
+      end
+
+      def test_every_sink_tag_declares_the_method_marshal_load_dispatches
+        assert_equal Constants::SINK_TAGS.sort, Constants::SINK_METHODS.keys.sort
+      end
+
+      def test_data_tag_is_gated_because_marshal_load_checks_respond_to_first
+        assert_includes Constants::GATED_SINK_TAGS, Constants::TAG_DATA,
+                        "Thread::Mutex is a real T_DATA with no _load_data and Marshal.load raises " \
+                        "TypeError naming the missing method, which is the gate"
       end
 
       class UserMarshalFixture

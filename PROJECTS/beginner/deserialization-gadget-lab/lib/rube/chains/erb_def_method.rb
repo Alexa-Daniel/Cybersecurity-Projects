@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # erb_def_method.rb
+# frozen_string_literal: true
 
 require "erb"
 
@@ -27,7 +28,7 @@ module Rube
       IVAR_FILENAME = :@filename
       IVAR_LINENO = :@lineno
 
-      CANARY_TEMPLATE = 'File.write(%<path>p, %<marker>p)'
+      CANARY_TEMPLATE = "File.write(%<path>p, %<marker>p)"
 
       def self.metadata
         {

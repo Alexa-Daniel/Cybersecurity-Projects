@@ -37,7 +37,9 @@ All six pieces are built and tested.
 - **Version-compatibility matrix** — probes six pinned Ruby images and reports where the
   published git gadget and the ERB `@_init` guard actually change.
 - **Reflection-based gadget scanner** — walks `ObjectSpace` for auto-invoked methods and
-  classifies them by whether `Marshal.load` can reach them.
+  classifies them by whether `Marshal.load` can reach them. It counts every error it
+  swallows, names the site, and treats a method it could not analyse as reachable rather
+  than inert, so under-reporting is visible instead of silent.
 - **Payload builder** — version-scoped chains carrying their own affected ranges.
 - **Vulnerable containerized target** — a Sinatra app with one endpoint that loads a
   session cookie and one that inspects it first.
@@ -70,12 +72,33 @@ and hands back a frozen snapshot:
 detector = Rube::Marshal::BoundaryDetector.new(allowed_class_names: %w[Hash String])
 decision = detector.inspect_stream(untrusted_bytes)
 
-decision.rejected?   # => true
+decision.blocked?    # => true
 decision.reason      # => "stream reaches Gem::Requirement#marshal_load during load, ..."
 ```
 
-Read `Rube::Marshal::BoundaryDetector::LIMITATION_NOTICE` before relying on an accept.
-An accepted stream is not a safe one, and the notice says so in detail.
+A decision is in exactly one of three states, and `proceed?` is the only one that gates a
+load:
+
+```ruby
+Marshal.load(decision.snapshot) if decision.proceed?
+```
+
+`proceed?` means the policy found no violation. `blocked?` means it found one and refused.
+`observed?` is the third state, and it exists because `POLICY_OBSERVE_AND_LOG` is
+non-blocking by design: a violation was found, reported, and deliberately not enforced. Such
+a decision still carries its snapshot, so a caller running in monitoring mode opts in by
+naming that state out loud:
+
+```ruby
+Marshal.load(decision.snapshot) if decision.proceed? || decision.observed?
+```
+
+There is no `accepted?`. The question "did the policy permit this" and the question "is
+this stream free of violations" have different answers under observe-and-log, and one
+predicate cannot answer both.
+
+Read `Rube::Marshal::BoundaryDetector::LIMITATION_NOTICE` before relying on `proceed?`.
+A stream that proceeds is not a safe one, and the notice says so in detail.
 
 Nothing above instantiates a class, calls a constructor, or invokes `Marshal.load`.
 

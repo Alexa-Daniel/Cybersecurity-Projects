@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # rube.gemspec
+# frozen_string_literal: true
 
 require_relative "lib/rube/version"
 

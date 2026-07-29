@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # app.rb
+# frozen_string_literal: true
 
 require "sinatra/base"
 require "base64"
@@ -16,21 +17,26 @@ module Rube
 
     CONTENT_TYPE = "text/plain"
 
-    ALLOWED_CLASSES = %w[Hash String Symbol Integer Array].freeze
+    PERMITTED_CLASS_NAMES = [].freeze
     BENIGN_TEMPLATE = "hello"
+
+    SESSION_KEYS = %i[user template].freeze
 
     DETECTOR = Rube::Marshal::BoundaryDetector.new(
       policy: Rube::Marshal::BoundaryDetector::POLICY_STRICT_ALLOWLIST,
-      allowed_class_names: ALLOWED_CLASSES,
+      allowed_class_names: PERMITTED_CLASS_NAMES,
       limits: Rube::Marshal::Limits.new
     )
 
     REJECTED = "rejected: %s"
     RENDERED = "rendered template for %s"
     NO_SESSION = "no session cookie"
+    NOT_A_SESSION = "payload is not a session hash"
 
     class App < Sinatra::Base
       set :host_authorization, permitted_hosts: []
+      set :show_exceptions, false
+      set :dump_errors, false
 
       get "/" do
         content_type CONTENT_TYPE
@@ -68,9 +74,12 @@ module Rube
         halt STATUS_BAD_REQUEST, NO_SESSION unless blob
 
         decision = DETECTOR.inspect_stream(blob)
-        halt STATUS_BAD_REQUEST, format(REJECTED, decision.reason) if decision.rejected?
+        halt STATUS_BAD_REQUEST, format(REJECTED, decision.reason) unless decision.proceed?
 
-        compile(::Marshal.load(decision.snapshot))
+        state = ::Marshal.load(decision.snapshot)
+        halt STATUS_BAD_REQUEST, format(REJECTED, NOT_A_SESSION) unless session?(state)
+
+        compile(state)
       end
 
       get "/canary" do
@@ -90,6 +99,10 @@ module Rube
         Base64.strict_decode64(raw)
       rescue ArgumentError
         nil
+      end
+
+      def session?(state)
+        state.is_a?(Hash) && SESSION_KEYS.all? { |key| state.key?(key) }
       end
 
       def compile(state)

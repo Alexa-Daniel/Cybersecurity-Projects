@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # corpus_test.rb
+# frozen_string_literal: true
 
 require_relative "test_helper"
 require_relative "support/adversarial_corpus"
@@ -25,9 +26,10 @@ module Rube
       disagreements = AdversarialCorpus::CASES.filter_map do |kase|
         decision = detector(kase[:allowed]).inspect_stream(kase[:bytes])
         expected = kase[:verdict] == AdversarialCorpus::VERDICT_ACCEPT
-        next if decision.accepted? == expected
+        next if decision.proceed? == expected
 
-        "#{kase[:name]}: expected #{kase[:verdict]}, got #{decision.accepted? ? 'accept' : 'reject'} (#{decision.reason})"
+        verdict = decision.proceed? ? "accept" : "reject"
+        "#{kase[:name]}: expected #{kase[:verdict]}, got #{verdict} (#{decision.reason})"
       end
 
       assert_empty disagreements, "corpus disagreements:\n  #{disagreements.join("\n  ")}"
@@ -48,7 +50,7 @@ module Rube
       allowlisted = AdversarialCorpus::CASES.reject { |kase| kase[:allowed].empty? }
       refute_empty allowlisted
 
-      leaks = allowlisted.reject { |kase| detector.inspect_stream(kase[:bytes]).rejected? }
+      leaks = allowlisted.reject { |kase| detector.inspect_stream(kase[:bytes]).blocked? }
       assert_empty leaks.map { |kase| kase[:name] },
                    "an allowlist must widen what is accepted, never what is rejected"
     end
@@ -79,7 +81,7 @@ module Rube
       hosts.each do |slot|
         refute_includes names, :"class_name_slot_#{slot}",
                         "#{slot} rejects on its own tag either way, so a corpus case cannot fail"
-        assert detector.inspect_stream(AdversarialCorpus::CLASS_NAME_SLOTS[slot]).rejected?
+        assert_predicate detector.inspect_stream(AdversarialCorpus::CLASS_NAME_SLOTS[slot]), :blocked?
       end
     end
   end

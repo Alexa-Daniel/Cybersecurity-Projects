@@ -1,12 +1,43 @@
 # ©AngelaMos | 2026
 # scanner_test.rb
+# frozen_string_literal: true
 
 require_relative "test_helper"
 
 module Rube
   class ScannerTest < Minitest::Test
-    def scan(**options)
-      Scanner.new(**options).scan
+    SUPPRESSION_NAMESPACE = "Rube::ScannerSuppressionFixture"
+    MISSING_SOURCE_PATH = "/nonexistent/rube-scanner-fixture.rb"
+
+    Object.class_eval(<<~SOURCE, MISSING_SOURCE_PATH, 1)
+      module Rube
+        module ScannerSuppressionFixture
+          class VanishedSource
+            def hash
+              @seed.to_i
+            end
+
+            def to_s
+              "vanished"
+            end
+          end
+        end
+      end
+    SOURCE
+
+    def scan(**)
+      Scanner.new(**).scan
+    end
+
+    def with_exploding(*fixtures)
+      fixtures.each { |fixture| fixture.explode = true }
+      yield
+    ensure
+      fixtures.each { |fixture| fixture.explode = false }
+    end
+
+    def suppressions_at(report, site)
+      report.suppressions.select { |suppression| suppression.site == site }
     end
 
     def local_scan
@@ -141,6 +172,212 @@ module Rube
       refute GatedFixture.instantiated, "scanner constructed a candidate class"
     end
 
+    def test_a_clean_scan_reports_no_suppressions
+      report = local_scan
+
+      assert_empty report.suppressions
+      assert_equal 0, report.suppressed_count
+      assert_predicate report, :complete?
+      refute_predicate report, :candidates_lost?
+    end
+
+    def test_a_lost_candidate_is_counted_and_names_the_class_it_came_from
+      control = candidates_for("Rube::ScannerTest::ExplodingHandleFixture")
+      assert_equal ["marshal_load"], control.map(&:method_name),
+                   "control: this fixture must be discoverable when it is not exploding"
+
+      with_exploding(ExplodingHandleFixture) do
+        report = local_scan
+
+        assert_empty(report.candidates.select { |c| c.class_name.end_with?("ExplodingHandleFixture") })
+        lost = suppressions_at(report, Scanner::SITE_CANDIDATE)
+        assert_equal 1, lost.length
+        assert_equal "Rube::ScannerTest::ExplodingHandleFixture#marshal_load", lost.first.subject
+        assert_predicate report, :candidates_lost?
+        refute_predicate report, :complete?
+      end
+    end
+
+    def test_a_suppressed_script_error_is_recorded_by_class
+      with_exploding(ExplodingHandleFixture) do
+        suppression = suppressions_at(local_scan, Scanner::SITE_CANDIDATE).first
+
+        assert_equal "ScriptError", suppression.error_class,
+                     "record rescues ScriptError as well as StandardError, so it must report which"
+      end
+    end
+
+    def test_an_unreadable_method_list_is_counted_as_a_lost_candidate
+      with_exploding(ExplodingMethodListFixture) do
+        report = local_scan
+
+        assert_empty(report.candidates.select { |c| c.class_name.end_with?("ExplodingMethodListFixture") })
+        assert_equal 1, suppressions_at(report, Scanner::SITE_OWN_METHODS).length
+        assert_predicate report, :candidates_lost?
+      end
+    end
+
+    def test_a_module_that_cannot_report_its_name_is_counted
+      with_exploding(ExplodingNameFixture) do
+        named = suppressions_at(local_scan, Scanner::SITE_MODULE_NAME)
+
+        refute_empty named
+        assert_equal Scanner::SUBJECT_UNNAMED, named.first.subject
+      end
+    end
+
+    def test_unparseable_source_is_counted_without_losing_the_candidate
+      report = scan(namespace: SUPPRESSION_NAMESPACE)
+
+      assert_equal ["#{SUPPRESSION_NAMESPACE}::VanishedSource#hash",
+                    "#{SUPPRESSION_NAMESPACE}::VanishedSource#to_s"],
+                   report.candidates.map(&:to_s),
+                   "control: the candidates must survive, only their state analysis failed"
+      assert_equal 1, suppressions_at(report, Scanner::SITE_SOURCE_PARSE).length
+      refute_predicate report, :candidates_lost?
+      refute_predicate report, :complete?
+    end
+
+    def test_a_candidate_whose_source_cannot_be_read_stays_reachable
+      candidate = scan(namespace: SUPPRESSION_NAMESPACE).candidates.first
+
+      refute_predicate candidate, :state_known?
+      refute_predicate candidate, :touches_state?
+      assert_predicate candidate, :reachable?,
+                       "an unreadable source cannot prove a method inert, and a scanner that " \
+                       "drops what it failed to analyse under-reports silently"
+    end
+
+    def test_a_c_defined_method_is_reported_as_unanalysable_not_as_inert
+      candidate = scan(namespace: "Gem").candidates.find { |c| c.source_location.nil? } ||
+                  scan.candidates.find { |c| c.source_location.nil? }
+
+      refute_nil candidate, "control: the stdlib must supply at least one C-defined candidate"
+      assert_predicate candidate, :unanalysable?
+      refute_predicate candidate, :state_known?
+      refute_predicate candidate, :touches_state?,
+                       "no Ruby source exists, so the answer is not false, it is unavailable"
+    end
+
+    def test_unanalysable_is_distinct_from_an_analysis_that_failed
+      vanished = scan(namespace: SUPPRESSION_NAMESPACE).candidates.first
+      c_defined = scan.candidates.find { |c| c.source_location.nil? }
+
+      refute_predicate vanished, :unanalysable?,
+                       "a source that exists but could not be read is a failure, not an absence"
+      assert_predicate c_defined, :unanalysable?
+      refute_predicate vanished, :state_known?
+      refute_predicate c_defined, :state_known?
+    end
+
+    def test_an_unanalysable_candidate_is_never_reachable_on_that_basis
+      report = scan
+      flooded = report.unanalysable.reject(&:gated?).select(&:reachable?)
+
+      refute_empty report.unanalysable, "control: a stock image must have C-defined candidates"
+      assert_empty flooded.first(5).map(&:to_s),
+                   "#{flooded.length} C-defined candidates were called reachable purely because " \
+                   "they could not be analysed; that is a pass-through, not a filter"
+    end
+
+    def test_control_an_unreadable_candidate_is_reachable_on_exactly_that_basis
+      unreadable = scan.candidates.select(&:unreadable_source?).reject(&:gated?).select(&:zero_arity?)
+
+      refute_empty unreadable, "control: without one of these the previous test is vacuous"
+      assert(unreadable.all?(&:reachable?),
+             "the two non-verdicts must behave differently, or splitting them bought nothing")
+    end
+
+    def test_the_report_counts_what_it_could_not_analyse
+      report = scan
+
+      assert_equal report.candidates.count(&:unanalysable?), report.unanalysable.length
+      assert_operator report.unanalysable.length, :>, 0
+      refute_predicate report, :fully_analysed?
+    end
+
+    def test_a_report_over_analysable_code_only_is_fully_analysed
+      report = local_scan
+
+      assert_empty report.unanalysable
+      assert_predicate report, :fully_analysed?
+    end
+
+    def test_an_analysed_candidate_reports_its_state_as_known
+      %w[StatefulFixture StatelessFixture].each do |fixture|
+        candidate = candidates_for("Rube::ScannerTest::#{fixture}").first
+
+        assert_predicate candidate, :state_known?,
+                         "control: a readable source must produce a verdict, or unknown means nothing"
+      end
+    end
+
+    def test_one_unreadable_file_is_counted_once_not_once_per_candidate
+      report = scan(namespace: SUPPRESSION_NAMESPACE)
+
+      assert_operator report.candidates.length, :>, 1,
+                      "control: one candidate cannot expose per-candidate inflation"
+      assert_equal 1, report.suppressed_count,
+                   "the parse cache must remember a failure, or the count inflates per candidate"
+    end
+
+    def test_suppressions_by_site_accounts_for_every_suppression
+      with_exploding(ExplodingHandleFixture, ExplodingMethodListFixture, ExplodingNameFixture) do
+        report = local_scan
+        by_site = report.suppressions_by_site
+
+        assert_equal report.suppressed_count, by_site.values.sum
+        assert_equal 3, by_site.keys.length
+        assert(by_site.keys.all? { |site| Scanner::SITES.include?(site) })
+      end
+    end
+
+    class ExplodingNameFixture
+      @explode = false
+
+      class << self
+        attr_accessor :explode
+
+        def name
+          raise NameError, "name unavailable" if @explode
+
+          super
+        end
+      end
+    end
+
+    class ExplodingMethodListFixture
+      @explode = false
+
+      class << self
+        attr_accessor :explode
+
+        def instance_methods(include_super = true)
+          raise NoMethodError, "method list unavailable" if @explode
+
+          super
+        end
+      end
+
+      def marshal_load(data); end
+    end
+
+    class ExplodingHandleFixture
+      @explode = false
+
+      class << self
+        attr_accessor :explode
+
+        def instance_method(name)
+          raise ScriptError, "handle unavailable" if @explode
+
+          super
+        end
+      end
+
+      def marshal_load(data); end
+    end
+
     class GatedFixture
       @instantiated = false
 
@@ -152,7 +389,7 @@ module Rube
     end
 
     class UserDefFixture
-      def self._load(data)
+      def self._load(_data)
         allocate
       end
     end

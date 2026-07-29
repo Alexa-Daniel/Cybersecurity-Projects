@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # render_matrix.rb
+# frozen_string_literal: true
 
 require "json"
 require "rube"
@@ -39,7 +40,7 @@ def section(title)
 end
 
 section("RUNTIME") do
-  puts format("  %-14s %-8s %-9s %-8s %-9s %-7s", "image", "ruby", "rubygems", "psych", "erb", "marshal")
+  puts format("  %-14s %-8s %-9s %-8s %-9s %s", "image", "ruby", "rubygems", "psych", "erb", "marshal")
   rows.each do |r|
     puts format("  %-14s %-8s %-9s %-8s %-9s %-7s",
                 short(r["image"]), r["ruby"], r["rubygems"], r["psych"], r["erb"], r["marshal_format"])
@@ -47,8 +48,8 @@ section("RUNTIME") do
 end
 
 section("GADGET SURFACE") do
-  puts format("  %-14s %-12s %-14s %s",
-              "image", "git gadget", "safe_marshal", TRACKED_CLASSES.map { |c| format("%-13s", c.split("::").last) }.join)
+  heads = TRACKED_CLASSES.map { |c| format("%-13s", c.split("::").last) }.join
+  puts format("  %-14s %-12s %-14s %s", "image", "git gadget", "safe_marshal", heads)
   rows.each do |r|
     present = TRACKED_CLASSES.map { |c| format("%-13s", mark(r["classes_baseline"][c])) }.join
     puts format("  %-14s %-12s %-14s %s", short(r["image"]), r["git_gadget"], r["safe_marshal"], present)
@@ -56,7 +57,7 @@ section("GADGET SURFACE") do
 end
 
 section("ERB @_init GUARD (CVE-2026-41316), anchor = def_method") do
-  puts format("  %-14s %-9s %-9s %-24s %s", "image", "erb", "guarded", "delegating", "cve says")
+  puts format("  %-14s %-9s %-9s %-24s %-8s", "image", "erb", "guarded", "delegating", "cve says")
   rows.each do |r|
     guard = r["erb_guard"]
     expected = cve_patched?(r["erb"]) ? "patched" : "affected"

@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # control_check.rb
+# frozen_string_literal: true
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
@@ -102,17 +103,46 @@ puts
 puts "=== 7 scanner precision ==="
 full = Rube::Scanner.new.scan
 ungated = full.ungated.length
-reachable = full.reachable.reject(&:gated?).length
+reachable = full.reachable.count { |c| !c.gated? }
 kept = ungated.zero? ? 0 : (100.0 * reachable / ungated).round(1)
-failures << "prism" unless check("prism backend live, so reachability is real", full.prism_available?,
-                                 full.prism_available? ? "Prism.parse_file in use" : "ABSENT, touches_state? is always false")
+prism_detail = full.prism_available? ? "Prism.parse_file in use" : "ABSENT, every state verdict is a guess"
+failures << "prism" unless check("prism backend live, so reachability is real",
+                                 full.prism_available?, prism_detail)
 failures << "precision" unless check("reachability filter discriminates",
                                      reachable.positive? && reachable < ungated,
                                      "#{ungated} ungated -> #{reachable} reachable, #{kept}% kept")
 failures << "gated located" unless check("gated sinks located", !full.gated.empty?,
-                                         full.gated.map(&:to_s).join(", "))
+                                         full.gated.join(", "))
+
+lossy = full.candidates_lost? ? full.suppressions.join(", ") : "0 lossy suppressions"
+failures << "candidates lost" unless check("no candidate was silently dropped",
+                                           !full.candidates_lost?, lossy)
+
+unreadable = full.candidates.select(&:unreadable_source?)
+fails_open = !unreadable.empty? &&
+             unreadable.all? { |c| c.gated? || !c.zero_arity? || c.reachable? }
+failures << "unreadable fails open" unless check("an unreadable source fails open, never to inert",
+                                                 fails_open,
+                                                 "#{unreadable.length} candidates whose source could not be parsed")
+
+unanalysable = full.unanalysable
+owned = !unanalysable.empty? && unanalysable.none?(&:state_known?) && !full.fully_analysed?
+failures << "unanalysable owned" unless check("C-defined methods are named unanalysable, not inert",
+                                              owned,
+                                              "#{unanalysable.length} of #{full.candidates.length} have no Ruby source")
+
+flooded = unanalysable.reject(&:gated?).select(&:reachable?)
+flood_detail = flooded.empty? ? "0 of #{unanalysable.length} promoted" : "#{flooded.length} promoted with no evidence"
+failures << "unanalysable flood" unless check("unanalysable never buys its way into reachable",
+                                              !unanalysable.empty? && flooded.empty?, flood_detail)
+
+coverage = "#{full.candidates.count(&:state_known?)} analysed, " \
+           "#{unanalysable.length} unanalysable, #{unreadable.length} unreadable"
+suppressed = full.complete? ? "none" : full.suppressions_by_site.map { |site, n| "#{site}=#{n}" }.join(" ")
 puts format("  %-6s %-46s %s", "INFO", "ObjectSpace coverage is load-bounded",
             "#{full.scanned_modules} modules loaded")
+puts format("  %-6s %-46s %s", "INFO", "state analysis coverage", coverage)
+puts format("  %-6s %-46s %s", "INFO", "suppressed errors this scan", suppressed)
 
 puts
 if failures.empty?

@@ -1,5 +1,6 @@
 # ©AngelaMos | 2026
 # chains.rb
+# frozen_string_literal: true
 
 module Rube
   module Chains
@@ -8,14 +9,16 @@ module Rube
     @registry = []
 
     class << self
-      attr_reader :registry
+      def registry
+        @registry.dup.freeze
+      end
 
       def register(chain)
         @registry << chain unless @registry.include?(chain)
       end
 
       def all
-        registry.reject { |chain| chain == Base }
+        @registry.reject { |chain| chain == Base }
       end
 
       def find(name)

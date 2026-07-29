@@ -26,8 +26,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CVE-2026-41316 (ERB `@_init`) as the reference chain
 - Deliberately vulnerable Sinatra target with one endpoint that loads a session
   cookie directly and one that inspects the stream first
-- `BoundaryDetector` with three policies, a frozen accepted snapshot, and a
-  written `LIMITATION_NOTICE` naming a bypass it cannot catch
+- `BoundaryDetector` with three policies, a frozen snapshot on any decision that
+  is not blocked, and a written `LIMITATION_NOTICE` naming a bypass it cannot
+  catch
+- `Decision` reports exactly one of three states — `proceed?`, `blocked?`,
+  `observed?` — validated in the constructor so they cannot overlap. `proceed?`
+  is the only predicate that should gate a `Marshal.load`; `observed?` is the
+  non-blocking observe-and-log outcome and a caller opts into it by name. There
+  is no `accepted?`, because one predicate cannot answer both "did the policy
+  permit this" and "is this stream free of violations"
+- Scanner error accounting: every swallowed rescue is recorded with its site,
+  subject and error class, and `Report` exposes `suppressed_count`,
+  `suppressions_by_site`, `complete?` and `candidates_lost?`
+- Four-state reachability analysis. A method is analysed (touches state or does
+  not), `unreadable_source?` (a path was given and could not be parsed, so it
+  fails open and stays reachable), or `unanalysable?` (no Ruby source exists at
+  all, so it is reported rather than guessed at). `Report#unanalysable` and
+  `#fully_analysed?` state the filter's real coverage instead of implying it saw
+  everything
+- Reject reasons escape and bound every attacker-controlled class name before it
+  reaches a caller-supplied reporter, so a name carrying CR, LF, ESC or NUL can
+  no longer forge log lines
+
+- Float bodies decode to the same value `Marshal.load` produces, including
+  `inf`, `-inf` and `nan`, hex literals, and the prefix-and-stop behaviour that
+  makes `"1_0"` parse as 1.0 and `"abc"` as 0.0. A body carrying Ruby's legacy
+  binary mantissa is reported through `Node#undecoded_tail` rather than guessed
+  at, so `fully_decoded?` is false instead of a plausible wrong number
+- The parse graph is sealed before it is returned. Every node, its collections
+  and its scalar values are frozen, so a caller cannot rewrite a verdict field
+  or splice a node into a graph the parser already reported on
+
+### Fixed
+
+- `read_float` returned `nil` for seven classes of body that `Marshal.load`
+  accepts, including the `inf`/`-inf`/`nan` forms Ruby emits today
+- Bounds checks on symlink and object-link indices relied on negative-index
+  wraparound being caught by a second clause; they now say what they mean
+- `Constants::GATED_SINK_TAGS` omitted `TAG_DATA` while `Scanner::GATED_METHODS`
+  listed `_load_data`, so the two halves disagreed about which sinks are gated.
+  `Marshal.load` does check `respond_to?(:_load_data)` before dispatching, which
+  a hand-built `d` stream naming a real C-level `T_DATA` demonstrates directly
+- The defended target endpoint returned HTTP 500 with a source snippet for any
+  root the detector accepted that was not a session hash
 - Detection of objects placed in **hash key** position, where `#hash` and `#eql?`
   are dispatched during load before any allowlist can act. Scoped to keys whose
   reconstructed value is not a `T_STRING`, matching what `Marshal.load` actually
