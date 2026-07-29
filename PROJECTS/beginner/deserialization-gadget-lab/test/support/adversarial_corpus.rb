@@ -35,6 +35,10 @@ module Rube
       ":#{fixnum(name.bytesize)}#{name}".b
     end
 
+    def symlink(index)
+      ";#{fixnum(index)}".b
+    end
+
     def str(text)
       "\"#{fixnum(text.bytesize)}#{text}".b
     end
@@ -43,14 +47,53 @@ module Rube
       "#{HEADER}#{body}".b
     end
 
-    def entry(name, bytes, verdict, rationale)
-      { name: name, bytes: bytes.b, verdict: verdict, rationale: rationale }.freeze
+    def entry(name, bytes, verdict, rationale, allowed: [])
+      { name: name, bytes: bytes.b, verdict: verdict, rationale: rationale,
+        allowed: allowed.freeze }.freeze
     end
 
     NESTED_DEPTH = 80
     WIDE_COUNT = 4_096
     MANY_SYMBOLS = 400
     HUGE_SCALAR = 300_000
+
+    TRIPWIRE_CLASS = "Tripwire"
+    HOST_CLASS = "Comparable"
+    OBJECT_CLASS = "Foo"
+    COLLIDING_IVAR = "@a"
+    HIDDEN_IVAR = "@z"
+
+    TRIPWIRE = "U#{sym(TRIPWIRE_CLASS)}0".b
+
+    CLASS_NAME_GADGET = "I#{sym(HOST_CLASS)}#{fixnum(1)}#{sym(HIDDEN_IVAR)}#{TRIPWIRE}".b
+
+    CLASS_NAME_SLOTS = {
+      object: stream("o#{CLASS_NAME_GADGET}#{fixnum(0)}"),
+      struct: stream("S#{CLASS_NAME_GADGET}#{fixnum(0)}"),
+      userdef: stream("u#{CLASS_NAME_GADGET}#{fixnum(1)}x"),
+      usermarshal: stream("U#{CLASS_NAME_GADGET}0"),
+      data: stream("d#{CLASS_NAME_GADGET}0"),
+      user_class: stream("C#{CLASS_NAME_GADGET}#{str('body')}"),
+      extended: stream("e#{CLASS_NAME_GADGET}#{str('body')}")
+    }.freeze
+
+    CLASS_NAME_SLOTS_WITH_NON_SINK_HOST = %i[object struct user_class extended].freeze
+
+    IVAR_COLLISION_SHAPES = {
+      wrapper_symlink_name:
+        stream("I#{str('hello')}#{fixnum(2)}#{sym(COLLIDING_IVAR)}#{TRIPWIRE}#{symlink(0)}0"),
+      wrapper_redefined_name:
+        stream("I#{str('hello')}#{fixnum(2)}#{sym(COLLIDING_IVAR)}#{TRIPWIRE}#{sym(COLLIDING_IVAR)}0"),
+      object_symlink_name:
+        stream("o#{sym(OBJECT_CLASS)}#{fixnum(2)}#{sym(COLLIDING_IVAR)}#{TRIPWIRE}#{symlink(1)}0"),
+      object_redefined_name:
+        stream("o#{sym(OBJECT_CLASS)}#{fixnum(2)}#{sym(COLLIDING_IVAR)}#{TRIPWIRE}#{sym(COLLIDING_IVAR)}0")
+    }.freeze
+
+    IVAR_COLLISION_SHAPES_INSIDE_OBJECT = %i[object_symlink_name object_redefined_name].freeze
+
+    IVAR_DISTINCT_NAMES_CONTROL =
+      stream("I#{str('hello')}#{fixnum(2)}#{sym(COLLIDING_IVAR)}#{TRIPWIRE}#{sym(HIDDEN_IVAR)}0")
 
     CASES = [
       entry(:nil_literal, stream("0"), VERDICT_ACCEPT,
@@ -136,7 +179,35 @@ module Rube
             "a sink hidden where a symbol is expected must not disappear from the report"),
       entry(:plain_object_no_sink, stream("o#{sym('ERB')}\x06#{sym('@src')}#{str('payload')}"),
             VERDICT_REJECT,
-            "carries no sink tag at all, which is exactly why sink detection is insufficient")
+            "carries no sink tag at all, which is exactly why sink detection is insufficient"),
+
+      entry(:ivar_collision_wrapper_symlink_name,
+            IVAR_COLLISION_SHAPES[:wrapper_symlink_name], VERDICT_REJECT,
+            "two ivars share a name under I, so a Hash write must not delete the first value node"),
+      entry(:ivar_collision_wrapper_redefined_name,
+            IVAR_COLLISION_SHAPES[:wrapper_redefined_name], VERDICT_REJECT,
+            "the same collision spelled as a second symbol definition rather than a symlink"),
+      entry(:ivar_collision_object_symlink_name,
+            IVAR_COLLISION_SHAPES[:object_symlink_name], VERDICT_REJECT,
+            "the collision inside an object body, where the allowlist would otherwise pass it",
+            allowed: [OBJECT_CLASS]),
+      entry(:ivar_collision_object_redefined_name,
+            IVAR_COLLISION_SHAPES[:object_redefined_name], VERDICT_REJECT,
+            "object body collision spelled as a redefinition",
+            allowed: [OBJECT_CLASS]),
+
+      entry(:class_name_slot_object, CLASS_NAME_SLOTS[:object], VERDICT_REJECT,
+            "control: the one slot that already retains its class-name node catches this gadget",
+            allowed: [HOST_CLASS]),
+      entry(:class_name_slot_struct, CLASS_NAME_SLOTS[:struct], VERDICT_REJECT,
+            "byte-identical gadget in a struct class-name slot",
+            allowed: [HOST_CLASS]),
+      entry(:class_name_slot_user_class, CLASS_NAME_SLOTS[:user_class], VERDICT_REJECT,
+            "byte-identical gadget in a user-class wrapper slot",
+            allowed: [HOST_CLASS]),
+      entry(:class_name_slot_extended, CLASS_NAME_SLOTS[:extended], VERDICT_REJECT,
+            "byte-identical gadget in an extend wrapper slot",
+            allowed: [HOST_CLASS])
     ].freeze
   end
 end

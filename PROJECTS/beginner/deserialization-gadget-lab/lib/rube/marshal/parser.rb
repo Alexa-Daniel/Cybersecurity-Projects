@@ -208,53 +208,58 @@ module Rube
         pair
       end
 
-      def read_ivar(tag, depth)
-        inner = read_value(depth)
-        read_entry_count(ROLE_IVAR).times do
-          name = read_value(depth + 1)
-          inner.auxiliary << name
-          inner.instance_variables_map[name.value] = read_value(depth + 1)
-        end
-        inner
-      end
-
-      def read_object(tag, depth)
-        node = register(Node.new(type: :object, tag: tag))
-        class_node = read_value(depth + 1)
+      def read_class_name(node, depth)
+        class_node = read_value(depth)
         node.class_name = class_node.value.to_s
         node.auxiliary << class_node
+        node
+      end
+
+      def read_instance_variables(node, depth)
         read_entry_count(ROLE_IVAR).times do
           name = read_value(depth + 1)
+          value = read_value(depth + 1)
           node.auxiliary << name
-          node.instance_variables_map[name.value] = read_value(depth + 1)
+          node.auxiliary << value
+          node.instance_variables_map[name.value] = value
         end
         node
       end
 
+      def read_ivar(tag, depth)
+        read_instance_variables(read_value(depth), depth)
+      end
+
+      def read_object(tag, depth)
+        node = register(Node.new(type: :object, tag: tag))
+        read_class_name(node, depth + 1)
+        read_instance_variables(node, depth)
+      end
+
       def read_struct(tag, depth)
         node = register(Node.new(type: :struct, tag: tag))
-        node.class_name = read_value(depth + 1).value.to_s
+        read_class_name(node, depth + 1)
         read_entry_count(ROLE_STRUCT).times { node.children << read_pair(depth) }
         node
       end
 
       def read_userdef(tag)
         node = Node.new(type: :userdef, tag: tag)
-        node.class_name = read_value(1).value.to_s
+        read_class_name(node, 1)
         node.value = read_counted_bytes
         node
       end
 
       def read_usermarshal(tag, depth)
         node = register(Node.new(type: :usermarshal, tag: tag))
-        node.class_name = read_value(depth + 1).value.to_s
+        read_class_name(node, depth + 1)
         node.children << read_value(depth + 1)
         node
       end
 
       def read_wrapped(tag, type, depth)
         node = register(Node.new(type: type, tag: tag))
-        node.class_name = read_value(depth + 1).value.to_s
+        read_class_name(node, depth + 1)
         node.children << read_value(depth + 1)
         node
       end

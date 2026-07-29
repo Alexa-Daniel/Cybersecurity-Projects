@@ -2,6 +2,7 @@
 # parser_test.rb
 
 require_relative "../test_helper"
+require_relative "../support/adversarial_corpus"
 
 module Rube
   module Marshal
@@ -213,10 +214,46 @@ module Rube
         assert_equal ["Evil#_load"], result.sinks.map { |s| "#{s.class_name}##{s.sink_method}" }
       end
 
+      def tripwires(blob)
+        parse(blob).sinks.select { |node| node.class_name == AdversarialCorpus::TRIPWIRE_CLASS }
+      end
+
       def test_class_name_node_is_traversable
         result = parse(::Marshal.dump(Fixture.new))
-        symbols = result.nodes.select { |n| n.type == :symbol }
-        refute_empty symbols
+        names = result.nodes.select { |node| node.type == :symbol }.map(&:value)
+        assert_includes names, :"Rube::Marshal::ParserTest::Fixture"
+      end
+
+      def test_class_name_slot_gadget_is_reachable_in_every_slot
+        blind = AdversarialCorpus::CLASS_NAME_SLOTS.reject { |_slot, bytes| tripwires(bytes).any? }
+
+        assert_empty blind.keys,
+                     "class-name node discarded, hiding a sink, in: #{blind.keys.join(', ')}"
+      end
+
+      def test_class_name_slot_gadget_is_counted_once_per_slot
+        duplicated = AdversarialCorpus::CLASS_NAME_SLOTS.select { |_slot, bytes| tripwires(bytes).length > 1 }
+
+        assert_empty duplicated.keys, "a node must be traversed exactly once"
+      end
+
+      def test_distinct_instance_variable_names_reach_the_sink
+        assert_equal 1, tripwires(AdversarialCorpus::IVAR_DISTINCT_NAMES_CONTROL).length,
+                     "control failed, so the collision tests below would prove nothing"
+      end
+
+      def test_duplicate_instance_variable_names_do_not_delete_a_sink
+        blind = AdversarialCorpus::IVAR_COLLISION_SHAPES.reject { |_shape, bytes| tripwires(bytes).any? }
+
+        assert_empty blind.keys,
+                     "duplicate ivar name deleted a subtree in: #{blind.keys.join(', ')}"
+      end
+
+      def test_duplicate_instance_variable_names_retain_both_values
+        AdversarialCorpus::IVAR_COLLISION_SHAPES.each do |shape, bytes|
+          nils = parse(bytes).nodes.count { |node| node.type == :nil }
+          assert_equal 2, nils, "#{shape} lost an instance variable value node"
+        end
       end
 
       def test_rejects_depth_beyond_limit

@@ -34,7 +34,6 @@ module Rube
 
         yield self
         children.each { |child| child.each(&block) }
-        instance_variables_map.each_value { |child| child.each(&block) }
         auxiliary.each { |child| child.each(&block) }
       end
     end
