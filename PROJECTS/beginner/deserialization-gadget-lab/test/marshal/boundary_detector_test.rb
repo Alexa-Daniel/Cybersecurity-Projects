@@ -5,11 +5,11 @@
 require_relative "../test_helper"
 require_relative "../support/adversarial_corpus"
 
-module Rube
+module Marshalsea
   module Marshal
     class BoundaryDetectorTest < Minitest::Test
       BENIGN = { "user" => "guest", "roles" => [1, 2, 3], "flag" => true }.freeze
-      CANARY_PATH = "/tmp/rube-canary"
+      CANARY_PATH = "/tmp/marshalsea-canary"
       CANARY_MARKER = "fired"
 
       def detector(**)
@@ -25,7 +25,7 @@ module Rube
       end
 
       def cve_blob
-        Rube::Chains::ErbDefMethod.canary(CANARY_PATH, CANARY_MARKER).serialize
+        Marshalsea::Chains::ErbDefMethod.canary(CANARY_PATH, CANARY_MARKER).serialize
       end
 
       def test_default_policy_is_strict_allowlist

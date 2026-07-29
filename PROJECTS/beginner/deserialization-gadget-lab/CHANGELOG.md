@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to rube are documented here.
+All notable changes to marshalsea are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scanner error accounting: every swallowed rescue is recorded with its site,
   subject and error class, and `Report` exposes `suppressed_count`,
   `suppressions_by_site`, `complete?` and `candidates_lost?`
+- Release workflow publishing to RubyGems by trusted publishing, so no long-lived API
+  key exists in repository secrets to leak. It fires on a `marshalsea-v*` tag, runs the
+  suites and the standalone controls on both Ruby 3.4 and 4.0 first, refuses to publish
+  if the tag disagrees with `Marshalsea::VERSION` or if the gemspec floor no longer
+  matches the tested matrix, and emits a Sigstore attestation. The attestation is a
+  publicly auditable record of which workflow built the artifact; it is **not** an
+  install-time protection, because neither `gem install` nor `bundle install` verifies
+  one today
 - Packaging gate that builds the gem from its declared manifest alone, audits
   what shipped, installs the artifact on the floor and current images, and
   exercises it from the installed copy rather than the worktree. It asserts every
@@ -90,6 +98,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a stream you already trust
 - `Limits.permissive` is a class method; it was an instance method that ignored
   its receiver and allocated twice
+- **Renamed from `rube` to `marshalsea`.** `rube` has been taken on rubygems.org since
+  2009-08-05, so the original name could never have been published. The module is
+  `Marshalsea`, the library path is `lib/marshalsea/`, and `require "rube"` becomes
+  `require "marshalsea"`. The Marshalsea was a London debtors' prison; the name is the
+  job description, since the tool holds untrusted objects at the gate and decides what
+  gets through
+- `Rakefile` gained `bundler/gem_tasks` and, with it, the `release` task the publishing
+  action invokes. It sets `Bundler::GemHelper.tag_prefix = "marshalsea-"`, because the
+  default produces a bare `v0.1.0` tag and this gem lives in a repository shared by
+  sixty projects. Note that `rake -T` still *prints* `Create tag v0.1.0`: that
+  description string is built when `bundler/gem_tasks` is required, before the prefix is
+  assigned. The tag actually created is `marshalsea-v0.1.0`, and `just package` asserts
+  the real value rather than the printed one
 - `required_ruby_version` raised from `>= 3.3` to `>= 3.4`. The old floor was
   never tested: every gate stage ran on Ruby 4.0 images only. Ruby 3.3 turns out
   to fail the suite, because `Marshal.load` did not validate the bignum sign byte

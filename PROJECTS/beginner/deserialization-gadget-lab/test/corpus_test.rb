@@ -5,7 +5,7 @@
 require_relative "test_helper"
 require_relative "support/adversarial_corpus"
 
-module Rube
+module Marshalsea
   class CorpusTest < Minitest::Test
     def detector(allowed = [])
       Marshal::BoundaryDetector.new(allowed_class_names: allowed)

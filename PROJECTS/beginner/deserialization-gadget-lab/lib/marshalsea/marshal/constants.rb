@@ -2,7 +2,7 @@
 # constants.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   module Marshal
     module Constants
       MAJOR_VERSION = 4

@@ -2,7 +2,7 @@
 # parser.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   module Marshal
     class Parser
       include Constants

@@ -5,7 +5,7 @@
 require_relative "../test_helper"
 require_relative "../support/adversarial_corpus"
 
-module Rube
+module Marshalsea
   module Marshal
     class ParserTest < Minitest::Test
       def parse(blob)
@@ -80,7 +80,7 @@ module Rube
       class RoleFixture; end
 
       def class_name_slot_streams
-        name = "Rube::Marshal::ParserTest::RoleFixture"
+        name = "Marshalsea::Marshal::ParserTest::RoleFixture"
         symbol = AdversarialCorpus.sym(name)
 
         {
@@ -285,7 +285,7 @@ module Rube
       def test_extracts_class_name_from_plain_object
         blob = ::Marshal.dump(Fixture.new)
         result = parse(blob)
-        assert_includes result.class_names, "Rube::Marshal::ParserTest::Fixture"
+        assert_includes result.class_names, "Marshalsea::Marshal::ParserTest::Fixture"
       end
 
       def test_extracts_class_name_without_instantiating
@@ -299,7 +299,7 @@ module Rube
         sink = result.sinks.first
         refute_nil sink
         assert_equal "marshal_load", sink.sink_method
-        assert_equal "Rube::Marshal::ParserTest::UserMarshalFixture", sink.class_name
+        assert_equal "Marshalsea::Marshal::ParserTest::UserMarshalFixture", sink.class_name
       end
 
       def test_flags_userdef_as_sink
@@ -410,7 +410,7 @@ module Rube
       def test_class_name_node_is_traversable
         result = parse(::Marshal.dump(Fixture.new))
         names = result.nodes.select { |node| node.type == :symbol }.map(&:value)
-        assert_includes names, :"Rube::Marshal::ParserTest::Fixture"
+        assert_includes names, :"Marshalsea::Marshal::ParserTest::Fixture"
       end
 
       def test_class_name_slot_gadget_is_reachable_in_every_slot
@@ -678,12 +678,12 @@ module Rube
       end
 
       def test_the_chain_registry_cannot_be_appended_to_by_a_caller
-        assert_raises(FrozenError) { Rube::Chains.registry << Object }
+        assert_raises(FrozenError) { Marshalsea::Chains.registry << Object }
       end
 
       def test_control_the_registry_still_reports_its_chains
-        refute_empty Rube::Chains.all
-        assert_includes Rube::Chains.all, Rube::Chains::ErbDefMethod
+        refute_empty Marshalsea::Chains.all
+        assert_includes Marshalsea::Chains.all, Marshalsea::Chains::ErbDefMethod
       end
 
       FIXNUM_WIDTH_PROBES = [
@@ -782,7 +782,7 @@ module Rube
 
       def test_the_parser_and_the_scanner_agree_on_which_sinks_are_gated
         from_tags = Constants::GATED_SINK_TAGS.map { |tag| Constants::SINK_METHODS.fetch(tag) }
-        from_scanner = Rube::Scanner::GATED_METHODS + Rube::Scanner::GATED_SINGLETON_METHODS
+        from_scanner = Marshalsea::Scanner::GATED_METHODS + Marshalsea::Scanner::GATED_SINGLETON_METHODS
 
         refute_empty from_tags, "control: an empty gated set would make this vacuous"
         assert_equal from_scanner.sort, from_tags.sort,

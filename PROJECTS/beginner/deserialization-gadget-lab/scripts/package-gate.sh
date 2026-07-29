@@ -42,15 +42,15 @@ if [[ -n "${GIVEN}" ]]; then
     echo "gem_built=true" | record
 else
     GEM_DIR="${WORK}/build"
-    GEM_FILE="rube-$(run -v "${HERE}:/src:ro" -w /src "${BUILD_IMAGE}" \
-        ruby -e 'require "./lib/rube/version"; print Rube::VERSION').gem"
+    GEM_FILE="marshalsea-$(run -v "${HERE}:/src:ro" -w /src "${BUILD_IMAGE}" \
+        ruby -e 'require "./lib/marshalsea/version"; print Marshalsea::VERSION').gem"
 
     run -v "${HERE}:/src:ro" -v "${WORK}/build:/out" -w /out "${BUILD_IMAGE}" sh -c '
         set -e
-        cd /src && ruby -e "puts Gem::Specification.load(%q{rube.gemspec}).files" >/out/declared.txt
+        cd /src && ruby -e "puts Gem::Specification.load(%q{marshalsea.gemspec}).files" >/out/declared.txt
         cd /out && tar -C /src -T declared.txt -cf - | tar -xf -
-        cp /src/rube.gemspec /out/
-        gem build --strict rube.gemspec
+        cp /src/marshalsea.gemspec /out/
+        gem build --strict marshalsea.gemspec
     ' 2>&1 | sed 's/^/  /'
 
     if [[ -f "${GEM_DIR}/${GEM_FILE}" ]]; then
@@ -75,16 +75,16 @@ install_and_use() {
         set -e
         gem install --local --no-document /gem/${GEM_FILE} >/dev/null
         ruby -e '
-          require \"rube\"
-          raise \"loaded from the worktree\" unless Gem.loaded_specs[\"rube\"]
+          require \"marshalsea\"
+          raise \"loaded from the worktree\" unless Gem.loaded_specs[\"marshalsea\"]
           blob = Marshal.dump(Gem::Requirement.new(\">= 0\"))
-          result = Rube::Marshal::Parser.new(blob).parse
+          result = Marshalsea::Marshal::Parser.new(blob).parse
           sinks = result.sinks.map { |s| \"#{s.class_name}##{s.sink_method}\" }
-          decision = Rube::Marshal::BoundaryDetector.new.inspect_stream(blob)
+          decision = Marshalsea::Marshal::BoundaryDetector.new.inspect_stream(blob)
           ok = result.class_names.include?(\"Gem::Requirement\") &&
                sinks.include?(\"Gem::Requirement#marshal_load\") &&
                decision.blocked? &&
-               !defined?(Rube::Marshal::FloatBody).nil?
+               !defined?(Marshalsea::Marshal::FloatBody).nil?
           puts \"installed_gem_works_on_${label}=#{ok}\"
         '
     " 2>&1 | tail -1
@@ -94,7 +94,23 @@ install_and_use "${FLOOR_IMAGE}" floor | record
 install_and_use "${BUILD_IMAGE}" current | record
 echo
 
-echo "=== 4 the floor is measured, not asserted ==="
+echo "=== 4 release identity ==="
+release_tag="$(run -v "${HERE}:/app:ro" -w /app "${BUILD_IMAGE}" \
+    ruby -e 'require "rake"; load "Rakefile"; print Bundler::GemHelper.instance.send(:version_tag)' 2>/dev/null)"
+gem_version="$(run -v "${HERE}:/app:ro" -w /app "${BUILD_IMAGE}" \
+    ruby -e 'require "./lib/marshalsea/version"; print Marshalsea::VERSION' 2>/dev/null)"
+echo "  rake release would tag: ${release_tag}"
+echo "release_tag_is_namespaced=$([[ ${release_tag} == "marshalsea-v${gem_version}" ]] && echo true || echo false)" | record
+
+bare_tag="$(run -v "${HERE}:/app:ro" -w /tmp "${BUILD_IMAGE}" sh -c '
+    cp -r /app/lib /app/marshalsea.gemspec /app/README.md /app/CHANGELOG.md /app/LICENSE /tmp/ 2>/dev/null
+    printf "require \"rake\"\nrequire \"bundler/gem_tasks\"\n" >/tmp/Rakefile
+    ruby -e "require \"rake\"; load \"Rakefile\"; print Bundler::GemHelper.instance.send(:version_tag)"
+' 2>/dev/null)"
+echo "control_bare_rakefile_tags_the_whole_monorepo=$([[ ${bare_tag} == "v${gem_version}" ]] && echo true || echo false)" | record
+echo
+
+echo "=== 5 the floor is measured, not asserted ==="
 suite_status=0
 for suite in marshal/parser_test scanner_test chains_test marshal/boundary_detector_test corpus_test; do
     if ! docker run --rm --network none -v "${HERE}:/app:ro" -w /app "${FLOOR_IMAGE}" \
@@ -114,7 +130,7 @@ differential() {
     local label="$2"
 
     docker run --rm --network none -v "${HERE}:/app:ro" -w /app "${image}" ruby -Ilib -e "
-        require \"rube\"
+        require \"marshalsea\"
         bytes = ${INVALID_SIGN_STREAM}
         ruby_accepts = begin
           Marshal.load(bytes)
@@ -123,9 +139,9 @@ differential() {
           false
         end
         parser_accepts = begin
-          Rube::Marshal::Parser.new(bytes).parse
+          Marshalsea::Marshal::Parser.new(bytes).parse
           true
-        rescue Rube::Marshal::StreamError
+        rescue Marshalsea::Marshal::StreamError
           false
         end
         puts \"${label}_ruby_accepts_invalid_sign=#{ruby_accepts}\"
@@ -137,13 +153,13 @@ differential "${FLOOR_IMAGE}" floor | record
 differential "${BELOW_FLOOR_IMAGE}" below_floor | record
 echo
 
-echo "=== 5 negative controls ==="
-cat >"${WORK}/ships-target/rube.gemspec" <<'SPEC'
-require_relative "lib/rube/version"
+echo "=== 6 negative controls ==="
+cat >"${WORK}/ships-target/marshalsea.gemspec" <<'SPEC'
+require_relative "lib/marshalsea/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "rube"
-  spec.version = Rube::VERSION
+  spec.name = "marshalsea"
+  spec.version = Marshalsea::VERSION
   spec.authors = ["Carter Perez"]
   spec.email = ["carterperez2222@gmail.com"]
   spec.summary = "control fixture that deliberately ships the vulnerable target"
@@ -159,7 +175,7 @@ SPEC
 run -v "${HERE}:/src:ro" -v "${WORK}/ships-target:/out" -w /out "${BUILD_IMAGE}" sh -c '
     set -e
     tar -C /src -cf - lib target README.md CHANGELOG.md LICENSE | tar -xf -
-    gem build rube.gemspec
+    gem build marshalsea.gemspec
 ' >/dev/null 2>&1
 
 control_target="$(run -v "${HERE}:/src:ro" -v "${WORK}/ships-target:/gem:ro" "${BUILD_IMAGE}" \
@@ -169,12 +185,12 @@ echo "control_auditor_rejects_a_gem_shipping_the_target=$([[ ${control_target} =
 
 run -v "${HERE}:/src:ro" -v "${WORK}/drifted:/out" -w /out "${BUILD_IMAGE}" sh -c '
     set -e
-    cd /src && ruby -e "puts Gem::Specification.load(%q{rube.gemspec}).files" >/out/declared.txt
+    cd /src && ruby -e "puts Gem::Specification.load(%q{marshalsea.gemspec}).files" >/out/declared.txt
     cd /out && tar -C /src -T declared.txt -cf - | tar -xf -
-    cp /src/rube.gemspec /out/
-    ruby -e "File.write(%q{lib/rube/version.rb}, File.read(%q{lib/rube/version.rb}) + %q{
+    cp /src/marshalsea.gemspec /out/
+    ruby -e "File.write(%q{lib/marshalsea/version.rb}, File.read(%q{lib/marshalsea/version.rb}) + %q{
 })"
-    gem build rube.gemspec
+    gem build marshalsea.gemspec
 ' >/dev/null 2>&1
 
 control_drift="$(run -v "${HERE}:/src:ro" -v "${WORK}/drifted:/gem:ro" "${BUILD_IMAGE}" \
@@ -225,6 +241,8 @@ expect container_files_absent "Dockerfile and rack config are absent"
 expect lab_artifacts_absent "no canary, payload or nested gem artifact shipped"
 expect installed_gem_works_on_floor "the installed gem parses, classifies and blocks on the floor"
 expect installed_gem_works_on_current "the installed gem parses, classifies and blocks on current"
+expect release_tag_is_namespaced "rake release tags marshalsea-vX, not a bare vX the monorepo shares"
+expect control_bare_rakefile_tags_the_whole_monorepo "without the tag_prefix line the tag really is bare, so that check is live"
 expect suite_green_on_floor "every suite is green on the floor image"
 reject floor_ruby_accepts_invalid_sign "on the floor, real Marshal rejects an invalid bignum sign"
 reject floor_parser_accepts_invalid_sign "on the floor, the parser rejects it too, so they agree"

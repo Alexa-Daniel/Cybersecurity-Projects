@@ -2,7 +2,7 @@
 # node.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   module Marshal
     class Node
       STRING_BACKED_TYPES = %i[string regexp].freeze

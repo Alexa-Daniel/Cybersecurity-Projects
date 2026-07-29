@@ -4,10 +4,10 @@
 
 require_relative "test_helper"
 
-module Rube
+module Marshalsea
   module Chains
     class ChainsTest < Minitest::Test
-      CANARY_PATH = "/tmp/rube-canary"
+      CANARY_PATH = "/tmp/marshalsea-canary"
       CANARY_MARKER = "fired"
 
       def chain
@@ -68,13 +68,13 @@ module Rube
 
       def test_serialize_produces_a_parseable_marshal_stream
         blob = chain.serialize
-        assert_equal [Rube::Marshal::Constants::MAJOR_VERSION, Rube::Marshal::Constants::MINOR_VERSION],
+        assert_equal [Marshalsea::Marshal::Constants::MAJOR_VERSION, Marshalsea::Marshal::Constants::MINOR_VERSION],
                      [blob.getbyte(0), blob.getbyte(1)]
-        assert_equal :object, Rube::Marshal::Parser.new(blob).parse.root.type
+        assert_equal :object, Marshalsea::Marshal::Parser.new(blob).parse.root.type
       end
 
       def test_payload_is_visible_to_the_parser_without_deserializing
-        result = Rube::Marshal::Parser.new(chain.serialize).parse
+        result = Marshalsea::Marshal::Parser.new(chain.serialize).parse
         assert_includes result.class_names, "ERB"
       end
 

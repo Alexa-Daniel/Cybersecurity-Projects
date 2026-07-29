@@ -13,11 +13,11 @@ echo
 output="$(docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1m \
     --user nobody \
     -v "${HERE}/lib:/app/lib:ro" -w /app "${VULNERABLE_IMAGE}" ruby -Ilib -e '
-require "rube"
-D = Rube::Marshal::BoundaryDetector
-CANARY = "/tmp/rube-canary"
+require "marshalsea"
+D = Marshalsea::Marshal::BoundaryDetector
+CANARY = "/tmp/marshalsea-canary"
 
-hostile = Rube::Chains::ErbDefMethod.canary(CANARY, "fired").serialize
+hostile = Marshalsea::Chains::ErbDefMethod.canary(CANARY, "fired").serialize
 benign  = Marshal.dump({ "user" => "guest", "roles" => [1, 2, 3] })
 sinky   = Marshal.dump(Gem::Requirement.new(">= 0"))
 

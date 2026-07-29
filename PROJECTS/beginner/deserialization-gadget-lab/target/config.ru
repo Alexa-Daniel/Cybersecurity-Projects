@@ -4,4 +4,4 @@
 
 require_relative "target/app"
 
-run Rube::Target::App
+run Marshalsea::Target::App

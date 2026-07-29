@@ -3,7 +3,7 @@
 # frozen_string_literal: true
 
 require "json"
-require "rube"
+require "marshalsea"
 
 TRACKED_CLASSES = %w[Gem::SpecFetcher Gem::Source::Git Gem::URI Net::WriteAdapter].freeze
 MARK_YES = "yes"
@@ -11,7 +11,7 @@ MARK_NO = "no"
 MARK_UNKNOWN = "?"
 RULE_WIDTH = 78
 
-CHAIN = Rube::Chains::ErbDefMethod
+CHAIN = Marshalsea::Chains::ErbDefMethod
 
 def cve_patched?(version)
   !CHAIN.affects?(version)

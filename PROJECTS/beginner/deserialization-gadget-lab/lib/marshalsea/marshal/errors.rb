@@ -2,7 +2,7 @@
 # errors.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   module Marshal
     class StreamError < StandardError; end
 

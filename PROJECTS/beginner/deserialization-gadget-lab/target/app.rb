@@ -5,12 +5,12 @@
 require "sinatra/base"
 require "base64"
 require "erb"
-require "rube"
+require "marshalsea"
 
-module Rube
+module Marshalsea
   module Target
     COOKIE_NAME = "session_state"
-    CANARY_PATH = "/tmp/rube-canary"
+    CANARY_PATH = "/tmp/marshalsea-canary"
 
     STATUS_OK = 200
     STATUS_BAD_REQUEST = 400
@@ -22,10 +22,10 @@ module Rube
 
     SESSION_KEYS = %i[user template].freeze
 
-    DETECTOR = Rube::Marshal::BoundaryDetector.new(
-      policy: Rube::Marshal::BoundaryDetector::POLICY_STRICT_ALLOWLIST,
+    DETECTOR = Marshalsea::Marshal::BoundaryDetector.new(
+      policy: Marshalsea::Marshal::BoundaryDetector::POLICY_STRICT_ALLOWLIST,
       allowed_class_names: PERMITTED_CLASS_NAMES,
-      limits: Rube::Marshal::Limits.new
+      limits: Marshalsea::Marshal::Limits.new
     )
 
     REJECTED = "rejected: %s"
@@ -41,7 +41,7 @@ module Rube
       get "/" do
         content_type CONTENT_TYPE
         [
-          "rube target",
+          "marshalsea target",
           "erb #{Gem::Specification.find_all_by_name('erb').map(&:version).max}",
           "ruby #{RUBY_VERSION}",
           "",

@@ -4,7 +4,7 @@
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
-require "rube"
+require "marshalsea"
 
 Pair = Struct.new(:x, :y)
 
@@ -28,7 +28,7 @@ puts "=== 2 object link indexing ==="
 cyclic = []
 cyclic << cyclic
 blob = Marshal.dump(cyclic)
-link = Rube::Marshal::Parser.new(blob).parse.root.children.first
+link = Marshalsea::Marshal::Parser.new(blob).parse.root.children.first
 bytes = blob.bytes.map { |b| format("%02x", b) }.join(" ")
 failures << "link index" unless check("self-referential array links to index 0", link.value.zero?, bytes)
 
@@ -50,7 +50,7 @@ corpus = [
   :sym, :"with spaces", :marshal_load,
   [], {}, [1, [2, [3, [4]]]], { a: { b: { c: 1 } } },
   (1..5).to_a, Pair.new(1, 2), Pair.new(nil, [1, 2]),
-  Object.new, Time.now, /regex/i, //mx, String, Comparable, Rube,
+  Object.new, Time.now, /regex/i, //mx, String, Comparable, Marshalsea,
   aliased, cyclic_hash, deep,
   { "mixed" => [1, :two, 3.0, nil, true] },
   Hash.new(0).tap { |h| h[:k] = 1 },
@@ -58,7 +58,7 @@ corpus = [
 ]
 
 parsed = corpus.count do |item|
-  Rube::Marshal::Parser.new(Marshal.dump(item)).parse.root
+  Marshalsea::Marshal::Parser.new(Marshal.dump(item)).parse.root
   true
 rescue StandardError => e
   puts "    #{item.class}: #{e.class}: #{e.message}"
@@ -69,16 +69,16 @@ failures << "corpus" unless check("every corpus entry parsed", parsed == corpus.
 puts
 puts "=== 4 stream rejection ==="
 rejected = begin
-  Rube::Marshal::Parser.new("\x04\x08[\x06@\x63").parse
+  Marshalsea::Marshal::Parser.new("\x04\x08[\x06@\x63").parse
   false
-rescue Rube::Marshal::InvalidLinkError
+rescue Marshalsea::Marshal::InvalidLinkError
   true
 end
 failures << "bounds" unless check("out-of-range object link rejected", rejected, "InvalidLinkError")
 
 puts
 puts "=== 5 payload inspection ==="
-result = Rube::Marshal::Parser.new(Marshal.dump(Gem::Requirement.new(">= 0"))).parse
+result = Marshalsea::Marshal::Parser.new(Marshal.dump(Gem::Requirement.new(">= 0"))).parse
 from_stream = result.gated_sinks.map { |s| "#{s.class_name}##{s.sink_method}" }.uniq.sort
 failures << "class names" unless check("classes extracted", !result.class_names.empty?,
                                        result.class_names.join(", "))
@@ -87,7 +87,7 @@ failures << "gated sinks" unless check("gated sinks flagged", !from_stream.empty
 
 puts
 puts "=== 6 parser and scanner agreement ==="
-scanned = Rube::Scanner.new(namespace: "Gem").scan.gated.map(&:to_s).sort
+scanned = Marshalsea::Scanner.new(namespace: "Gem").scan.gated.map(&:to_s).sort
 missing = from_stream - scanned
 located = !from_stream.empty? && missing.empty?
 agreement_detail = if from_stream.empty?
@@ -101,7 +101,7 @@ failures << "agreement" unless check("parser sinks located by reflection", locat
 
 puts
 puts "=== 7 scanner precision ==="
-full = Rube::Scanner.new.scan
+full = Marshalsea::Scanner.new.scan
 ungated = full.ungated.length
 reachable = full.reachable.count { |c| !c.gated? }
 kept = ungated.zero? ? 0 : (100.0 * reachable / ungated).round(1)

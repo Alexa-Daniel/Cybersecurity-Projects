@@ -1,19 +1,19 @@
 # ©AngelaMos | 2026
-# rube.gemspec
+# marshalsea.gemspec
 # frozen_string_literal: true
 
-require_relative "lib/rube/version"
+require_relative "lib/marshalsea/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "rube"
-  spec.version = Rube::VERSION
+  spec.name = "marshalsea"
+  spec.version = Marshalsea::VERSION
   spec.authors = ["Carter Perez"]
   spec.email = ["carterperez2222@gmail.com"]
 
   spec.summary = "Ruby object-deserialization security lab: inspect, understand, and defend against gadget chains"
-  spec.description = "rube parses Ruby Marshal streams without deserializing them, discovers gadget " \
-                     "sinks by runtime reflection, and ships the defenses that stop them. Built as a " \
-                     "teaching artifact for the deserialization vulnerability class."
+  spec.description = "marshalsea parses Ruby Marshal streams without deserializing them, discovers " \
+                     "gadget sinks by runtime reflection, and ships the defenses that stop them. Built " \
+                     "as a teaching artifact for the deserialization vulnerability class."
   spec.homepage = "https://github.com/CarterPerez-dev/Cybersecurity-Projects"
   spec.license = "AGPL-3.0-or-later"
 

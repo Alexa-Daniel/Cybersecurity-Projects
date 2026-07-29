@@ -2,7 +2,7 @@
 # limits.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   module Marshal
     class Limits
       DEFAULT_MAX_BYTES = 1_048_576

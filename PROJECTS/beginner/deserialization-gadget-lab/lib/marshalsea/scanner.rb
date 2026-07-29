@@ -2,7 +2,7 @@
 # scanner.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   class Scanner
     GATED_METHODS = %w[marshal_load _load_data].freeze
     GATED_SINGLETON_METHODS = %w[_load].freeze

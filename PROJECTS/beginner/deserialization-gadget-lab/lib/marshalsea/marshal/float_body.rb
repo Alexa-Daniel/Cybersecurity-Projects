@@ -2,7 +2,7 @@
 # float_body.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   module Marshal
     module FloatBody
       module_function

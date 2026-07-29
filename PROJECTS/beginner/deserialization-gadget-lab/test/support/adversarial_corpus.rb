@@ -2,7 +2,7 @@
 # adversarial_corpus.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   module AdversarialCorpus
     HEADER = "\x04\x08"
     INLINE_OFFSET = 5

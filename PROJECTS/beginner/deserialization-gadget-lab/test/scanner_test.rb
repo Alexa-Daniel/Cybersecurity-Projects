@@ -4,13 +4,13 @@
 
 require_relative "test_helper"
 
-module Rube
+module Marshalsea
   class ScannerTest < Minitest::Test
-    SUPPRESSION_NAMESPACE = "Rube::ScannerSuppressionFixture"
-    MISSING_SOURCE_PATH = "/nonexistent/rube-scanner-fixture.rb"
+    SUPPRESSION_NAMESPACE = "Marshalsea::ScannerSuppressionFixture"
+    MISSING_SOURCE_PATH = "/nonexistent/marshalsea-scanner-fixture.rb"
 
     Object.class_eval(<<~SOURCE, MISSING_SOURCE_PATH, 1)
-      module Rube
+      module Marshalsea
         module ScannerSuppressionFixture
           class VanishedSource
             def hash
@@ -41,7 +41,7 @@ module Rube
     end
 
     def local_scan
-      scan(namespace: "Rube::ScannerTest")
+      scan(namespace: "Marshalsea::ScannerTest")
     end
 
     def candidates_for(class_name)
@@ -49,71 +49,71 @@ module Rube
     end
 
     def test_finds_gated_sink_defined_on_a_class
-      found = candidates_for("Rube::ScannerTest::GatedFixture")
+      found = candidates_for("Marshalsea::ScannerTest::GatedFixture")
       assert_equal ["marshal_load"], found.map(&:method_name)
       assert_equal :gated, found.first.gate
     end
 
     def test_finds_singleton_load_as_gated_sink
-      found = candidates_for("Rube::ScannerTest::UserDefFixture")
+      found = candidates_for("Marshalsea::ScannerTest::UserDefFixture")
       assert_includes found.map(&:method_name), "_load"
     end
 
     def test_finds_ungated_dispatch_method
-      found = candidates_for("Rube::ScannerTest::UngatedFixture")
+      found = candidates_for("Marshalsea::ScannerTest::UngatedFixture")
       assert_equal ["hash"], found.map(&:method_name)
       assert_equal :ungated, found.first.gate
     end
 
     def test_finds_method_missing_as_ungated
-      found = candidates_for("Rube::ScannerTest::ProxyFixture")
+      found = candidates_for("Marshalsea::ScannerTest::ProxyFixture")
       assert_includes found.map(&:method_name), "method_missing"
     end
 
     def test_negative_control_class_with_no_auto_invoked_methods_is_not_reported
-      assert_empty candidates_for("Rube::ScannerTest::InertFixture")
+      assert_empty candidates_for("Marshalsea::ScannerTest::InertFixture")
     end
 
     def test_precision_control_inherited_methods_are_not_reported
-      assert_empty candidates_for("Rube::ScannerTest::InheritsOnlyFixture")
+      assert_empty candidates_for("Marshalsea::ScannerTest::InheritsOnlyFixture")
     end
 
     def test_candidates_carry_source_location
-      candidate = candidates_for("Rube::ScannerTest::GatedFixture").first
+      candidate = candidates_for("Marshalsea::ScannerTest::GatedFixture").first
       refute_nil candidate.source_location
       assert_includes candidate.source_location, "scanner_test.rb"
     end
 
     def test_candidates_report_arity
-      candidate = candidates_for("Rube::ScannerTest::GatedFixture").first
+      candidate = candidates_for("Marshalsea::ScannerTest::GatedFixture").first
       assert_equal 1, candidate.arity
     end
 
     def test_ungated_methods_report_zero_arity
-      candidate = candidates_for("Rube::ScannerTest::UngatedFixture").first
+      candidate = candidates_for("Marshalsea::ScannerTest::UngatedFixture").first
       assert_predicate candidate, :zero_arity?
     end
 
     def test_reachability_via_instance_variable_read
-      candidate = candidates_for("Rube::ScannerTest::StatefulFixture").first
+      candidate = candidates_for("Marshalsea::ScannerTest::StatefulFixture").first
       assert_predicate candidate, :touches_state?
       assert_predicate candidate, :reachable?
     end
 
     def test_reachability_via_implicit_self_call
-      candidate = candidates_for("Rube::ScannerTest::AccessorFixture").first
+      candidate = candidates_for("Marshalsea::ScannerTest::AccessorFixture").first
       assert_predicate candidate, :touches_state?, "attr_reader access must count as touching state"
       assert_predicate candidate, :reachable?
     end
 
     def test_negative_control_stateless_method_is_not_reachable
-      candidate = candidates_for("Rube::ScannerTest::StatelessFixture").first
+      candidate = candidates_for("Marshalsea::ScannerTest::StatelessFixture").first
       refute_predicate candidate, :touches_state?
       refute_predicate candidate, :reachable?
     end
 
     def test_gated_sinks_are_reachable_regardless_of_state
-      candidate = candidates_for("Rube::ScannerTest::GatedFixture").first
+      candidate = candidates_for("Marshalsea::ScannerTest::GatedFixture").first
       assert_predicate candidate, :reachable?
     end
 
@@ -138,8 +138,8 @@ module Rube
     end
 
     def test_namespace_filter_excludes_everything_else
-      report = scan(namespace: "Rube::ScannerTest")
-      assert(report.candidates.all? { |c| c.class_name.start_with?("Rube::ScannerTest") })
+      report = scan(namespace: "Marshalsea::ScannerTest")
+      assert(report.candidates.all? { |c| c.class_name.start_with?("Marshalsea::ScannerTest") })
     end
 
     def test_report_partitions_gated_and_ungated
@@ -182,7 +182,7 @@ module Rube
     end
 
     def test_a_lost_candidate_is_counted_and_names_the_class_it_came_from
-      control = candidates_for("Rube::ScannerTest::ExplodingHandleFixture")
+      control = candidates_for("Marshalsea::ScannerTest::ExplodingHandleFixture")
       assert_equal ["marshal_load"], control.map(&:method_name),
                    "control: this fixture must be discoverable when it is not exploding"
 
@@ -192,7 +192,7 @@ module Rube
         assert_empty(report.candidates.select { |c| c.class_name.end_with?("ExplodingHandleFixture") })
         lost = suppressions_at(report, Scanner::SITE_CANDIDATE)
         assert_equal 1, lost.length
-        assert_equal "Rube::ScannerTest::ExplodingHandleFixture#marshal_load", lost.first.subject
+        assert_equal "Marshalsea::ScannerTest::ExplodingHandleFixture#marshal_load", lost.first.subject
         assert_predicate report, :candidates_lost?
         refute_predicate report, :complete?
       end
@@ -305,7 +305,7 @@ module Rube
 
     def test_an_analysed_candidate_reports_its_state_as_known
       %w[StatefulFixture StatelessFixture].each do |fixture|
-        candidate = candidates_for("Rube::ScannerTest::#{fixture}").first
+        candidate = candidates_for("Marshalsea::ScannerTest::#{fixture}").first
 
         assert_predicate candidate, :state_known?,
                          "control: a readable source must produce a verdict, or unknown means nothing"

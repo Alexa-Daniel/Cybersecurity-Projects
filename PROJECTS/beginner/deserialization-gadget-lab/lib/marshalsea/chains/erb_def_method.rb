@@ -4,7 +4,7 @@
 
 require "erb"
 
-module Rube
+module Marshalsea
   module Chains
     class ErbDefMethod < Base
       CHAIN_NAME = "erb-def-method"
@@ -20,7 +20,7 @@ module Rube
       ].freeze
 
       SRC_PREFIX = "#\nend\n"
-      SRC_SUFFIX = "\ndef _rube_unused\n"
+      SRC_SUFFIX = "\ndef _marshalsea_unused\n"
       DEFAULT_FILENAME = "(erb)"
       DEFAULT_LINENO = 0
 

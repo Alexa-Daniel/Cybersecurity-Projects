@@ -2,7 +2,7 @@
 # boundary_detector.rb
 # frozen_string_literal: true
 
-module Rube
+module Marshalsea
   module Marshal
     class ReporterRequiredError < StandardError; end
 
@@ -32,7 +32,7 @@ module Rube
       LIMITATION_NOTICE = <<~NOTICE
         SECURITY LIMITATION
 
-        Rube::Marshal::BoundaryDetector examines a bounded snapshot of Marshal bytes and
+        Marshalsea::Marshal::BoundaryDetector examines a bounded snapshot of Marshal bytes and
         applies a caller-selected policy before deserialization. An ACCEPT decision means
         only that this snapshot matched that policy.
 

@@ -6,9 +6,9 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-IMAGE="rube-target:local"
-CONTAINER="rube-target-gate"
-PORT="${RUBE_TARGET_PORT:-47823}"
+IMAGE="marshalsea-target:local"
+CONTAINER="marshalsea-target-gate"
+PORT="${MARSHALSEA_TARGET_PORT:-47823}"
 BASE="http://127.0.0.1:${PORT}"
 CANARY_MARKER="fired"
 
@@ -48,9 +48,9 @@ echo
 
 payload="$(docker run --rm --network none -v "${HERE}/lib:/app/lib:ro" -w /app ruby:4.0-slim \
     ruby -Ilib -e '
-require "rube"
+require "marshalsea"
 require "base64"
-chain = Rube::Chains::ErbDefMethod.canary("/tmp/rube-canary", "fired")
+chain = Marshalsea::Chains::ErbDefMethod.canary("/tmp/marshalsea-canary", "fired")
 state = { user: "attacker", template: chain.generate }
 print Base64.strict_encode64(Marshal.dump(state))
 ')"
@@ -76,7 +76,7 @@ else
     failures=$((failures + 1))
 fi
 
-docker exec "${CONTAINER}" rm -f /tmp/rube-canary >/dev/null 2>&1 || true
+docker exec "${CONTAINER}" rm -f /tmp/marshalsea-canary >/dev/null 2>&1 || true
 
 reset="$(curl -s "${BASE}/canary")"
 safe_body="$(curl -s --cookie "session_state=${payload}" "${BASE}/render/safe")"
@@ -136,7 +136,7 @@ echo
 leak_file="$(mktemp)"
 curl -s -o "${leak_file}" -H "Cookie: session_state=$(encode 'nil')" "${BASE}/render/safe"
 curl -s -o "${leak_file}.v" -H "Cookie: session_state=$(encode 'nil')" "${BASE}/render"
-if grep -qE "app\.rb|/app/lib|rube/marshal" "${leak_file}" "${leak_file}.v"; then
+if grep -qE "app\.rb|/app/lib|marshalsea/marshal" "${leak_file}" "${leak_file}.v"; then
     echo "  FAIL   an error response leaked source paths or source lines"
     failures=$((failures + 1))
 else
@@ -168,11 +168,11 @@ done
 echo
 sinks="$(docker run --rm --network none -v "${HERE}/lib:/app/lib:ro" -w /app ruby:4.0-slim \
     ruby -Ilib -e '
-require "rube"
+require "marshalsea"
 require "base64"
-chain = Rube::Chains::ErbDefMethod.canary("/tmp/rube-canary", "fired")
+chain = Marshalsea::Chains::ErbDefMethod.canary("/tmp/marshalsea-canary", "fired")
 blob = Marshal.dump({ user: "attacker", template: chain.generate })
-result = Rube::Marshal::Parser.new(blob).parse
+result = Marshalsea::Marshal::Parser.new(blob).parse
 print result.sinks.length
 ')"
 

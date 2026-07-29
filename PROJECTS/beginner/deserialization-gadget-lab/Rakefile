@@ -3,6 +3,9 @@
 # frozen_string_literal: true
 
 require "rake/testtask"
+require "bundler/gem_tasks"
+
+Bundler::GemHelper.tag_prefix = "marshalsea-"
 
 Rake::TestTask.new(:test) do |t|
   t.libs = %w[lib test]

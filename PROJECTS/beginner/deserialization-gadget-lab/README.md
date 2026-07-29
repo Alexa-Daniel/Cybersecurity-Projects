@@ -1,10 +1,14 @@
-# rube
+# marshalsea
 
 A Ruby object-deserialization security lab.
 
 A gadget chain is a Rube Goldberg machine. One untrusted blob goes in, a dozen
 unrelated standard-library methods knock each other over, and code execution falls out
 the far end. This project builds the machine, then builds the thing that stops it.
+
+The Marshalsea was a London debtors' prison, in operation from 1373 to 1842. The name is
+the job: hold untrusted objects at the gate and decide what gets through, before
+`Marshal.load` turns bytes into behaviour.
 
 ## Why this exists
 
@@ -59,7 +63,7 @@ same stream raises `ArgumentError: invalid Bignum sign`:
 | `+` and `-` | accept | accept | accept | accept |
 | `!`, `\x00`, `\xFF`, `0` | accept | accept | **reject** | **reject** |
 
-rube's parser accepts `+` and `-` only, so it models 3.4 and newer. Run it on 3.3 and it
+marshalsea's parser accepts `+` and `-` only, so it models 3.4 and newer. Run it on 3.3 and it
 disagrees with the interpreter it exists to model on four of those six bytes. A stream
 inspector that disagrees with the loader it guards is not worth shipping, so the floor sits
 where the agreement starts. `just package` re-proves this in both directions on every run:
@@ -67,12 +71,16 @@ on the floor image Ruby and the parser agree, one version below it they diverge.
 
 ## Installation
 
-rube is not published to rubygems.org. Build it from this checkout and install the artifact:
+The first release has not been cut yet, so there is nothing on rubygems.org to install from.
+Build it from this checkout:
 
 ```
 just build
-gem install --local tmp/build/rube-0.1.0.gem
+gem install --local tmp/build/marshalsea-0.1.0.gem
 ```
+
+Releases are published from CI by trusted publishing, so no long-lived API key exists to
+leak. `gem install marshalsea` starts working once the first tag ships.
 
 The gem carries `lib/`, the README, the changelog, and the license. Nothing else. The
 vulnerable target, the adversarial corpus, the gate scripts, and the research notes stay in
@@ -81,10 +89,10 @@ the repository, and `just package` fails if any of them turn up inside a built a
 ## Usage
 
 ```ruby
-require "rube"
+require "marshalsea"
 
 payload = Marshal.dump(Gem::Requirement.new(">= 0"))
-result = Rube::Marshal::Parser.new(payload).parse
+result = Marshalsea::Marshal::Parser.new(payload).parse
 
 result.class_names
 # => ["Gem::Requirement", "Gem::Version"]
@@ -93,15 +101,15 @@ result.sinks.map { |s| "#{s.class_name}##{s.sink_method}" }
 # => ["Gem::Requirement#marshal_load", "Gem::Version#marshal_load"]
 ```
 
-`Parser.new` enforces `Rube::Marshal::Limits.new` unless you say otherwise. Every ceiling
-is opt-out, never opt-in — pass `limits: Rube::Marshal::Limits.permissive` if you are doing
+`Parser.new` enforces `Marshalsea::Marshal::Limits.new` unless you say otherwise. Every ceiling
+is opt-out, never opt-in — pass `limits: Marshalsea::Marshal::Limits.permissive` if you are doing
 forensics on a stream you already trust and want it parsed whole.
 
 To make a decision rather than inspect a stream, use the detector, which applies a policy
 and hands back a frozen snapshot:
 
 ```ruby
-detector = Rube::Marshal::BoundaryDetector.new(allowed_class_names: %w[Hash String])
+detector = Marshalsea::Marshal::BoundaryDetector.new(allowed_class_names: %w[Hash String])
 decision = detector.inspect_stream(untrusted_bytes)
 
 decision.blocked?    # => true
@@ -129,7 +137,7 @@ There is no `accepted?`. The question "did the policy permit this" and the quest
 this stream free of violations" have different answers under observe-and-log, and one
 predicate cannot answer both.
 
-Read `Rube::Marshal::BoundaryDetector::LIMITATION_NOTICE` before relying on `proceed?`.
+Read `Marshalsea::Marshal::BoundaryDetector::LIMITATION_NOTICE` before relying on `proceed?`.
 A stream that proceeds is not a safe one, and the notice says so in detail.
 
 Nothing above instantiates a class, calls a constructor, or invokes `Marshal.load`.
@@ -158,8 +166,33 @@ just manifest   list exactly what would ship in the .gem
 on disk still matches the source it claims to be built from:
 
 ```
-just package tmp/build/rube-0.1.0.gem
+just package tmp/build/marshalsea-0.1.0.gem
 ```
+
+## Releasing
+
+Bump `Marshalsea::VERSION`, then push a tag:
+
+```
+git tag marshalsea-v0.1.0
+git push origin marshalsea-v0.1.0
+```
+
+That is the whole release. CI runs the suites and the standalone controls on Ruby 3.4 and
+4.0, refuses to continue if the tag disagrees with `Marshalsea::VERSION` or if the gemspec
+floor no longer matches the tested matrix, and then publishes through RubyGems trusted
+publishing. There is no API key anywhere in this repository, and none to rotate or leak:
+the job proves its identity to rubygems.org with a short-lived OIDC token issued by GitHub
+for that specific workflow.
+
+The tag is prefixed because sixty projects share this repository and a bare `v0.1.0` would
+not say which one it belongs to. `rake -T` still prints `Create tag v0.1.0` because that
+description is built before the prefix is applied; the tag actually created is
+`marshalsea-v0.1.0`, and `just package` asserts the real value rather than the printed one.
+
+Each release also publishes a Sigstore attestation recording which workflow built the
+artifact and from which commit. Treat it as an auditable record, not as protection: neither
+`gem install` nor `bundle install` verifies attestations today.
 
 ## A note on the object-link index
 
