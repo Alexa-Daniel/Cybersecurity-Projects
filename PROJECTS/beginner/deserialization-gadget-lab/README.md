@@ -46,6 +46,38 @@ All six pieces are built and tested.
 - **Boundary detector** — the defensive layer, with an explicit written statement of what
   it cannot do.
 
+## Requirements
+
+Ruby **3.4 or newer**. That floor is measured, not picked for tidiness.
+
+Ruby changed `Marshal.load` between 3.3 and 3.4. Through 3.3, any byte in a bignum's sign
+position is accepted and anything that is not `-` is read as positive. From 3.4 onward the
+same stream raises `ArgumentError: invalid Bignum sign`:
+
+| sign byte | 3.2.11 | 3.3.12 | 3.4.10 | 4.0.6 |
+|---|---|---|---|---|
+| `+` and `-` | accept | accept | accept | accept |
+| `!`, `\x00`, `\xFF`, `0` | accept | accept | **reject** | **reject** |
+
+rube's parser accepts `+` and `-` only, so it models 3.4 and newer. Run it on 3.3 and it
+disagrees with the interpreter it exists to model on four of those six bytes. A stream
+inspector that disagrees with the loader it guards is not worth shipping, so the floor sits
+where the agreement starts. `just package` re-proves this in both directions on every run:
+on the floor image Ruby and the parser agree, one version below it they diverge.
+
+## Installation
+
+rube is not published to rubygems.org. Build it from this checkout and install the artifact:
+
+```
+just build
+gem install --local tmp/build/rube-0.1.0.gem
+```
+
+The gem carries `lib/`, the README, the changelog, and the license. Nothing else. The
+vulnerable target, the adversarial corpus, the gate scripts, and the research notes stay in
+the repository, and `just package` fails if any of them turn up inside a built artifact.
+
 ## Usage
 
 ```ruby
@@ -116,9 +148,17 @@ just matrix     probe six pinned Ruby images and render the compatibility matrix
 just exploit    prove the chain fires on a vulnerable image and is blocked on a patched one
 just target     stand up the vulnerable app and attack it over HTTP
 just detector   prove the defensive layer rejects the payload the target executes
+just package    build the gem, audit what shipped, install it, prove the version floor
 just gate       everything above, in order
-just build      build the gem with --strict
+just build      build the gem with --strict into tmp/build
 just manifest   list exactly what would ship in the .gem
+```
+
+`just package` also audits an artifact you already have, which is how you check that a gem
+on disk still matches the source it claims to be built from:
+
+```
+just package tmp/build/rube-0.1.0.gem
 ```
 
 ## A note on the object-link index

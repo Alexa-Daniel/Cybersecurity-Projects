@@ -17,7 +17,7 @@ Gem::Specification.new do |spec|
   spec.homepage = "https://github.com/CarterPerez-dev/Cybersecurity-Projects"
   spec.license = "AGPL-3.0-or-later"
 
-  spec.required_ruby_version = ">= 3.3"
+  spec.required_ruby_version = ">= 3.4"
 
   spec.metadata = {
     "source_code_uri" => "#{spec.homepage}/tree/main/PROJECTS/beginner/deserialization-gadget-lab",

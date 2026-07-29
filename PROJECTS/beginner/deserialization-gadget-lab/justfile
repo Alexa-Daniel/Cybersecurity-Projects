@@ -8,6 +8,8 @@ vuln_image := "ruby:4.0.2-slim"
 run := "docker run --rm --network none -v $PWD:/app -w /app " + image
 run_ro := "docker run --rm --network none -v $PWD:/app:ro -w /app " + image
 lint_run := "docker run --rm -v $PWD:/app -w /app " + image
+owner := `id -u` + ":" + `id -g`
+build_run := "docker run --rm --network none --user " + owner + " -e HOME=/tmp"
 
 default:
     @just --list
@@ -48,10 +50,15 @@ target:
 detector:
     @bash scripts/detector-gate.sh
 
-gate: check matrix exploit detector target
+package *gem:
+    @bash scripts/package-gate.sh {{gem}}
+
+gate: check matrix exploit detector target package
 
 build:
-    {{run}} sh -c "gem build --strict rube.gemspec"
+    @mkdir -p tmp/build
+    {{build_run}} -v $PWD:/src:ro -v $PWD/tmp/build:/out -w /out {{image}} sh -c "set -e; cd /src && ruby -e 'puts Gem::Specification.load(%q{rube.gemspec}).files' >/out/declared.txt; cd /out && tar -C /src -T declared.txt -cf - | tar -xf -; cp /src/rube.gemspec /out/; gem build --strict rube.gemspec"
+    @ls -l tmp/build/*.gem
 
 manifest:
     {{run_ro}} ruby -e 'spec = Gem::Specification.load("rube.gemspec"); puts spec.files.sort; puts; puts "#{spec.files.length} files"'
@@ -65,3 +72,4 @@ pull:
 
 clean:
     rm -f *.gem
+    rm -rf tmp/build tmp/package

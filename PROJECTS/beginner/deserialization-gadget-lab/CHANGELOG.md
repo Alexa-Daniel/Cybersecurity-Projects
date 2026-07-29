@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scanner error accounting: every swallowed rescue is recorded with its site,
   subject and error class, and `Report` exposes `suppressed_count`,
   `suppressions_by_site`, `complete?` and `candidates_lost?`
+- Packaging gate that builds the gem from its declared manifest alone, audits
+  what shipped, installs the artifact on the floor and current images, and
+  exercises it from the installed copy rather than the worktree. It asserts every
+  shipped `lib` file is byte-identical to source, which catches an artifact built
+  from stale code even though such a gem installs and requires without error. It
+  can be pointed at a `.gem` you already have, and it carries three negative
+  controls: a gem that ships the vulnerable target must be rejected, a gem with a
+  drifted `lib` file must be rejected, and RubyGems must refuse to install below
+  the declared floor
 - Four-state reachability analysis. A method is analysed (touches state or does
   not), `unreadable_source?` (a path was given and could not be parsed, so it
   fails open and stays reachable), or `unanalysable?` (no Ruby source exists at
@@ -81,6 +90,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a stream you already trust
 - `Limits.permissive` is a class method; it was an instance method that ignored
   its receiver and allocated twice
+- `required_ruby_version` raised from `>= 3.3` to `>= 3.4`. The old floor was
+  never tested: every gate stage ran on Ruby 4.0 images only. Ruby 3.3 turns out
+  to fail the suite, because `Marshal.load` did not validate the bignum sign byte
+  until 3.4 and the parser is written against the version that does. 3.4 is the
+  oldest release on which the whole suite is green, so it is the floor.
+  `TargetRubyVersion` moves with it, as those two must stay equal
+- `just build` writes to `tmp/build` as the invoking user instead of dropping a
+  root-owned `.gem` in the repository root, and stages only the files the gemspec
+  declares, so a manifest that omits a file can no longer produce a gem that
+  builds anyway
 
 ### Fixed
 

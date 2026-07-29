@@ -8,10 +8,11 @@ plugins:
 
 AllCops:
   NewCops: enable
-  TargetRubyVersion: 3.3
+  TargetRubyVersion: 3.4
   Exclude:
     - "vendor/**/*"
     - "docs/**/*"
+    - "tmp/**/*"
 
 Style/Documentation:
   Enabled: false
