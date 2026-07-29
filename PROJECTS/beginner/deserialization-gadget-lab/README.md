@@ -28,15 +28,21 @@ opposite outcome, decided entirely by where the check sits.
 
 ## Status
 
-Under construction. What exists and is tested:
+All six pieces are built and tested.
 
 - **Marshal stream parser** — parses the binary format, extracts referenced class names
   and gadget sinks, and validates structure, all without ever calling `Marshal.load`.
   Rejects truncated streams, unsupported versions, unknown tags, out-of-bounds object
   links and symlinks, oversized fixnum widths, trailing bytes, and excessive nesting.
-
-Planned: version-compatibility matrix, reflection-based gadget scanner, payload builder,
-a deliberately vulnerable containerized target, and the defensive layer.
+- **Version-compatibility matrix** — probes six pinned Ruby images and reports where the
+  published git gadget and the ERB `@_init` guard actually change.
+- **Reflection-based gadget scanner** — walks `ObjectSpace` for auto-invoked methods and
+  classifies them by whether `Marshal.load` can reach them.
+- **Payload builder** — version-scoped chains carrying their own affected ranges.
+- **Vulnerable containerized target** — a Sinatra app with one endpoint that loads a
+  session cookie and one that inspects it first.
+- **Boundary detector** — the defensive layer, with an explicit written statement of what
+  it cannot do.
 
 ## Usage
 
@@ -53,6 +59,24 @@ result.sinks.map { |s| "#{s.class_name}##{s.sink_method}" }
 # => ["Gem::Requirement#marshal_load", "Gem::Version#marshal_load"]
 ```
 
+`Parser.new` enforces `Rube::Marshal::Limits.new` unless you say otherwise. Every ceiling
+is opt-out, never opt-in — pass `limits: Rube::Marshal::Limits.permissive` if you are doing
+forensics on a stream you already trust and want it parsed whole.
+
+To make a decision rather than inspect a stream, use the detector, which applies a policy
+and hands back a frozen snapshot:
+
+```ruby
+detector = Rube::Marshal::BoundaryDetector.new(allowed_class_names: %w[Hash String])
+decision = detector.inspect_stream(untrusted_bytes)
+
+decision.rejected?   # => true
+decision.reason      # => "stream reaches Gem::Requirement#marshal_load during load, ..."
+```
+
+Read `Rube::Marshal::BoundaryDetector::LIMITATION_NOTICE` before relying on an accept.
+An accepted stream is not a safe one, and the notice says so in detail.
+
 Nothing above instantiates a class, calls a constructor, or invokes `Marshal.load`.
 
 ## Development
@@ -60,9 +84,16 @@ Nothing above instantiates a class, calls a constructor, or invokes `Marshal.loa
 Everything runs in Docker against a pinned Ruby.
 
 ```
-just test       run the parser suite
+just test       run the minitest suites
 just control    run the negative controls
 just check      both
+just corpus     print every adversarial corpus case and its verdict
+just scan       run the gadget scanner over loaded modules
+just matrix     probe six pinned Ruby images and render the compatibility matrix
+just exploit    prove the chain fires on a vulnerable image and is blocked on a patched one
+just target     stand up the vulnerable app and attack it over HTTP
+just detector   prove the defensive layer rejects the payload the target executes
+just gate       everything above, in order
 just build      build the gem with --strict
 just manifest   list exactly what would ship in the .gem
 ```
