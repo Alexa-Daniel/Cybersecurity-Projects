@@ -11,7 +11,7 @@ TREE = ARGV.fetch(1)
 EXPECTED_FLOOR = ARGV.fetch(2)
 EXTRACT_ROOT = ARGV.fetch(3)
 
-DOC_FILES = %w[README.md CHANGELOG.md LICENSE].freeze
+DOC_FILES = %w[README.md LICENSE].freeze
 LIB_PREFIX = "lib/"
 
 FORBIDDEN = {

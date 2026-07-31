@@ -19,6 +19,8 @@ test:
     {{run_ro}} ruby -Ilib -Itest test/scanner_test.rb
     {{run_ro}} ruby -Ilib -Itest test/chains_test.rb
     {{run_ro}} ruby -Ilib -Itest test/marshal/boundary_detector_test.rb
+    {{run_ro}} ruby -Ilib -Itest test/marshal/load_guard_test.rb
+    {{run_ro}} ruby -Ilib -Itest test/psych/inspector_test.rb
     {{run_ro}} ruby -Ilib -Itest test/corpus_test.rb
 
 corpus:
@@ -46,6 +48,18 @@ exploit:
 
 target:
     @bash scripts/target-gate.sh
+
+target-up:
+    docker build -q -f target/Dockerfile -t marshalsea-target:local . >/dev/null
+    docker run -d --rm --name marshalsea-target --read-only \
+        --tmpfs /tmp:rw,noexec,nosuid,size=1m --cap-drop ALL \
+        --security-opt no-new-privileges --pids-limit 128 --memory 256m \
+        -p "127.0.0.1:${MARSHALSEA_TARGET_PORT:-47823}:4567" marshalsea-target:local
+    @echo "target on http://127.0.0.1:${MARSHALSEA_TARGET_PORT:-47823}"
+    @echo "this one is published and therefore NOT egress-isolated; just target is"
+
+target-down:
+    -docker rm -f marshalsea-target
 
 detector:
     @bash scripts/detector-gate.sh

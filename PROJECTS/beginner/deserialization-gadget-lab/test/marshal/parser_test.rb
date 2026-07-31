@@ -372,6 +372,17 @@ module Marshalsea
         assert_equal %w[first second], node.children.map(&:value)
       end
 
+      def test_regexp_options_are_decoded_rather_than_discarded
+        insensitive = roundtrip(/ab/i)
+        plain = roundtrip(/ab/)
+
+        assert_equal plain.value, insensitive.value, "control: the source bytes are identical"
+        refute_equal plain.regexp_options, insensitive.regexp_options,
+                     "two regexps that differ only in their flags must not parse identically"
+        assert_equal 0, plain.regexp_options
+        assert_predicate insensitive.regexp_options, :positive?
+      end
+
       def test_regexp_options_byte_is_not_mistaken_for_the_next_value
         node = roundtrip([/pattern/ix, :sentinel])
         assert_equal :symbol, node.children.last.type
@@ -458,6 +469,26 @@ module Marshalsea
         end
         assert_equal :symbol, Parser.new(blob, limits: Limits.permissive).parse.root.type,
                      "control: permissive must admit it, or a ceiling is not what rejected it"
+      end
+
+      def test_permissive_lifts_every_ceiling_except_the_stack_safety_one
+        lifted = Limits.permissive
+        axes = %i[max_bytes max_nodes max_registered_objects max_symbol_definitions
+                  max_collection_entries max_scalar_bytes max_total_scalar_bytes
+                  max_object_links max_symbol_references max_symbol_name_bytes
+                  max_class_name_bytes max_instance_variables max_struct_members]
+
+        bounded = axes.reject { |axis| lifted.public_send(axis) == Limits::UNBOUNDED }
+        assert_empty bounded, "permissive must lift these, one assertion per axis"
+
+        assert_equal Limits::STACK_SAFE_MAX_DEPTH, lifted.max_depth,
+                     "depth stays bounded on purpose: the parser recurses, so lifting it would " \
+                     "trade a rescuable DepthLimitError for an uncatchable SystemStackError"
+        assert_raises(DepthLimitError) do
+          Parser.new(AdversarialCorpus.stream(
+                       AdversarialCorpus.array_nest(Limits::STACK_SAFE_MAX_DEPTH + 5) + "0"
+                     ), limits: lifted).parse
+        end
       end
 
       def test_default_depth_ceiling_is_the_limits_value_not_the_permissive_one
@@ -574,7 +605,7 @@ module Marshalsea
       end
 
       def parser_predicts_dispatch?(key)
-        parse(::Marshal.dump({ key => nil })).dispatching_hash_keys.any?
+        parse(::Marshal.dump({ key => nil })).hash_dispatching_keys.any?
       end
 
       def test_hash_key_dispatch_prediction_matches_real_ruby
@@ -591,6 +622,138 @@ module Marshalsea
         end
 
         assert_empty mismatches, "parser disagrees with Marshal.load:\n  #{mismatches.join("\n  ")}"
+      end
+
+      DISPATCHED = []
+
+      module RecordsBoth
+        def hash
+          DISPATCHED << :hash
+          0
+        end
+
+        def eql?(_other)
+          DISPATCHED << :eql?
+          false
+        end
+      end
+
+      class BothPlainKey
+        include RecordsBoth
+      end
+
+      class BothStringKey < String
+        include RecordsBoth
+      end
+
+      class BothArrayKey < Array
+        include RecordsBoth
+      end
+
+      def collision_probes
+        {
+          "plain object (o)" => [BothPlainKey.new, BothPlainKey.new],
+          "String subclass (C)" => [BothStringKey.new("x"), BothStringKey.new("x")],
+          "Array subclass (C)" => [BothArrayKey.new([1]), BothArrayKey.new([1])],
+          "extended string (e)" => [(+"x").extend(RecordsBoth), (+"x").extend(RecordsBoth)],
+          "bare array holding a gadget" => [[BothPlainKey.new], [BothPlainKey.new]],
+          "bare array of primitives" => [[1, 2], [1, 2]],
+          "plain string" => [+"x", +"x"]
+        }
+      end
+
+      def collision_blob(pair)
+        ::Marshal.dump({ pair.first => 1, pair.last => 2 })
+      end
+
+      def ruby_dispatches_during_load(pair)
+        blob = collision_blob(pair)
+        DISPATCHED.clear
+        ::Marshal.load(blob)
+        DISPATCHED.uniq.sort
+      end
+
+      def parser_predicts_during_load(pair)
+        result = parse(collision_blob(pair))
+        predicted = []
+        predicted << :hash if result.hash_dispatching_keys.any?
+        predicted << :eql? if result.eql_dispatching_keys.any?
+        predicted.sort
+      end
+
+      def test_key_dispatch_prediction_matches_real_ruby_for_hash_and_eql
+        observed = collision_probes.to_h { |label, pair| [label, ruby_dispatches_during_load(pair)] }
+        seen = observed.values.flatten.uniq
+
+        assert_includes seen, :hash, "no probe dispatched #hash, so the oracle is dead"
+        assert_includes seen, :eql?, "no probe dispatched #eql?, so a one-key oracle would pass vacuously"
+        assert_includes observed.values, [], "every probe dispatched, so the oracle proves nothing"
+
+        mismatches = collision_probes.filter_map do |label, pair|
+          predicted = parser_predicts_during_load(pair)
+          next if predicted == observed.fetch(label)
+
+          "#{label}: ruby=#{observed.fetch(label).inspect} parser=#{predicted.inspect}"
+        end
+
+        assert_empty mismatches,
+                     "the detector names both methods in its reject reason, so it must model " \
+                     "both:\n  #{mismatches.join("\n  ")}"
+      end
+
+      def test_a_string_subclass_key_skips_hash_and_still_reaches_eql
+        observed = ruby_dispatches_during_load(collision_probes.fetch("String subclass (C)"))
+
+        assert_equal %i[eql?], observed,
+                     "rb_any_hash fast-paths T_STRING so #hash is skipped, but rb_any_cmp " \
+                     "requires klass == rb_cString so #eql? is not"
+      end
+
+      def test_a_collection_key_is_inspected_through_its_members
+        gadget = parse(collision_blob(collision_probes.fetch("bare array holding a gadget")))
+        inert = parse(collision_blob(collision_probes.fetch("bare array of primitives")))
+
+        refute_empty gadget.hash_dispatching_keys,
+                     "an array key hashes every element, so a gadget inside one dispatches"
+        assert_empty inert.hash_dispatching_keys,
+                     "control: an array of primitives names no class, so flagging it would be " \
+                     "a false positive and the rule would be a blanket reject"
+      end
+
+      def test_a_collection_key_reports_the_member_that_dispatches_not_the_container
+        result = parse(collision_blob(collision_probes.fetch("bare array holding a gadget")))
+        named = result.hash_dispatching_keys.first.effective_class_name
+
+        assert_equal "Marshalsea::Marshal::ParserTest::BothPlainKey", named,
+                     "an operator needs the class that runs, not the anonymous array holding it"
+      end
+
+      class CmpEndpoint
+        def <=>(_other)
+          DISPATCHED << :cmp
+          0
+        end
+      end
+
+      def test_range_endpoints_dispatch_and_are_reported
+        blob = ::Marshal.dump(CmpEndpoint.new..CmpEndpoint.new)
+        DISPATCHED.clear
+        ::Marshal.load(blob)
+
+        assert_includes DISPATCHED, :cmp,
+                        "Range#marshal_load validates its endpoints, so <=> runs during load"
+        assert_empty parse(blob).sinks,
+                     "control: Range carries no sink tag on this Ruby, so the sink rule cannot " \
+                     "be what catches this"
+        assert_equal ["Marshalsea::Marshal::ParserTest::CmpEndpoint"],
+                     parse(blob).range_endpoint_dispatchers.map(&:effective_class_name).uniq
+        assert_equal 2, parse(blob).range_endpoint_dispatchers.length,
+                     "range_init compares both endpoints, so both are reported"
+      end
+
+      def test_a_range_of_primitives_is_not_reported
+        assert_empty parse(::Marshal.dump(1..5)).range_endpoint_dispatchers,
+                     "control: primitive endpoints dispatch only builtin <=>"
       end
 
       def test_the_same_class_is_only_flagged_in_key_position
@@ -616,6 +779,26 @@ module Marshalsea
         end
 
         assert_empty noisy.keys, "false positive on: #{noisy.keys.join(', ')}"
+      end
+
+      def test_string_backed_key_shapes_are_flagged_on_eql_and_never_on_hash
+        shapes = AdversarialCorpus::HASH_KEY_SHAPES_THAT_DISPATCH_EQL_ONLY
+
+        wrong_method = shapes.select { |_shape, bytes| parse(bytes).hash_dispatching_keys.any? }
+        assert_empty wrong_method.keys,
+                     "rb_any_hash never reaches a user #hash for T_STRING, so claiming it does " \
+                     "would make the reject reason a false statement: #{wrong_method.keys.join(', ')}"
+
+        missed = shapes.reject { |_shape, bytes| parse(bytes).eql_dispatching_keys.any? }
+        assert_empty missed.keys, "#eql? dispatch missed in: #{missed.keys.join(', ')}"
+      end
+
+      def test_every_dispatching_key_shape_is_caught_by_the_hash_rule
+        blind = AdversarialCorpus::HASH_KEY_SHAPES_THAT_DISPATCH.reject do |_shape, bytes|
+          parse(bytes).hash_dispatching_keys.any?
+        end
+
+        assert_empty blind.keys, "#hash dispatch missed in: #{blind.keys.join(', ')}"
       end
 
       def test_struct_member_name_slot_is_not_scanned_as_a_hash_key

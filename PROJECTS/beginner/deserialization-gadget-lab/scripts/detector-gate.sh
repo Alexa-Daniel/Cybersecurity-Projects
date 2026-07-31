@@ -52,6 +52,52 @@ if loose_hostile.proceed?
   fired = File.exist?(CANARY)
 end
 puts "documented_bypass_executes=#{fired}"
+File.delete(CANARY) if File.exist?(CANARY)
+
+G = Marshalsea::Marshal::LoadGuard
+BODIES = []
+class GuardGadget
+  def marshal_dump = ["x"]
+  def marshal_load(_d) = BODIES << :ran
+end
+class GuardBenign
+  def marshal_dump = ["x"]
+  def marshal_load(_d) = BODIES << :ran
+end
+
+gadget_blob = Marshal.dump(GuardGadget.new)
+benign_blob = Marshal.dump(GuardBenign.new)
+
+BODIES.clear
+vetoed = begin
+  G.new.load(gadget_blob)
+  false
+rescue Marshalsea::Marshal::GuardedLoadError
+  true
+end
+puts "guard_vetoes_an_unpermitted_hook=#{vetoed}"
+puts "guard_vetoes_before_the_body_runs=#{BODIES.empty?}"
+
+BODIES.clear
+allowed = begin
+  G.new(permitted_class_names: %w[GuardBenign]).load(benign_blob)
+  true
+rescue Marshalsea::Marshal::GuardedLoadError
+  false
+end
+puts "control_guard_admits_a_permitted_hook=#{allowed}"
+puts "control_the_permitted_body_actually_ran=#{BODIES == [:ran]}"
+
+BODIES.clear
+guard_run = G.new
+begin
+  guard_run.load(gadget_blob)
+rescue Marshalsea::Marshal::GuardedLoadError
+  nil
+end
+puts "guard_reports_the_hook_it_refused=#{guard_run.observations.map(&:to_s) == ["GuardGadget#marshal_load"]}"
+
+puts "guard_error_is_an_ordinary_standard_error=#{Marshalsea::Marshal::GuardedLoadError < StandardError}"
 ' 2>&1)"
 
 echo "${output}" | sed 's/^/  /'
@@ -77,6 +123,12 @@ expect observe_and_log_reports_observed "observe-and-log reports the third state
 expect observe_and_log_proceeds_on_benign "observe-and-log still proceeds on a clean stream"
 expect blocked_is_not_also_observed "the three decision states stay mutually exclusive"
 expect documented_bypass_executes "the documented bypass actually executes, so the notice is honest"
+expect guard_vetoes_an_unpermitted_hook "the runtime guard refuses an unpermitted deserialization hook"
+expect guard_vetoes_before_the_body_runs "the guard vetoes before the hook body runs, which the load proc cannot do"
+expect control_guard_admits_a_permitted_hook "a guard that refused everything would prove nothing"
+expect control_the_permitted_body_actually_ran "the permitted hook really executed, so the control is live"
+expect guard_reports_the_hook_it_refused "the guard names the hook it refused rather than failing silently"
+expect guard_error_is_an_ordinary_standard_error "the guard raises a StandardError, not a SecurityError that skips every rescue"
 
 echo
 if [[ ${failures} -eq 0 ]]; then

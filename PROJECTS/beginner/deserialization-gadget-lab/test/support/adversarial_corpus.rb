@@ -143,16 +143,35 @@ module Marshalsea
       object_link: stream("[#{fixnum(2)}#{PLAIN_OBJECT}{#{fixnum(1)}@#{fixnum(1)}0"),
       struct: stream("{#{fixnum(1)}S#{sym(OBJECT_CLASS)}#{fixnum(0)}0"),
       extended: stream("{#{fixnum(1)}e#{sym(HOST_CLASS)}#{PLAIN_OBJECT}0"),
-      user_class_over_array: stream("{#{fixnum(1)}C#{sym(OBJECT_CLASS)}[#{fixnum(0)}0")
+      user_class_over_array: stream("{#{fixnum(1)}C#{sym(OBJECT_CLASS)}[#{fixnum(0)}0"),
+      bare_array: stream("{#{fixnum(1)}[#{fixnum(1)}#{PLAIN_OBJECT}0"),
+      nested_bare_array: stream("{#{fixnum(1)}[#{fixnum(1)}[#{fixnum(1)}#{PLAIN_OBJECT}0")
+    }.freeze
+
+    HASH_KEY_SHAPES_THAT_DISPATCH_EQL_ONLY = {
+      user_class_over_string: stream("{#{fixnum(1)}C#{sym(OBJECT_CLASS)}#{str('x')}0"),
+      extended_over_string: stream("{#{fixnum(1)}e#{sym(HOST_CLASS)}#{str('x')}0")
     }.freeze
 
     HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH = {
-      user_class_over_string: stream("{#{fixnum(1)}C#{sym(OBJECT_CLASS)}#{str('x')}0"),
-      extended_over_string: stream("{#{fixnum(1)}e#{sym(HOST_CLASS)}#{str('x')}0"),
       regexp: stream("{#{fixnum(1)}#{regexp('ab')}0"),
       symbol: stream("{#{fixnum(1)}#{sym('k')}0"),
-      string: stream("{#{fixnum(1)}#{str('k')}0")
+      string: stream("{#{fixnum(1)}#{str('k')}0"),
+      array_of_primitives: stream("{#{fixnum(1)}[#{fixnum(2)}i\x06i\x070"),
+      empty_array: stream("{#{fixnum(1)}[#{fixnum(0)}0")
     }.freeze
+
+    RANGE_CLASS = "Range"
+
+    def range_stream(endpoint)
+      stream(
+        "o#{sym(RANGE_CLASS)}#{fixnum(3)}" \
+        "#{sym('excl')}F#{sym('begin')}#{endpoint}#{sym('end')}#{endpoint}"
+      )
+    end
+
+    RANGE_WITH_OBJECT_ENDPOINTS = range_stream(PLAIN_OBJECT)
+    RANGE_WITH_PRIMITIVE_ENDPOINTS = range_stream("i\x06".b)
 
     OBJECT_IN_VALUE_POSITION =
       stream("{#{fixnum(1)}#{sym('k')}#{PLAIN_OBJECT}")
@@ -296,17 +315,41 @@ module Marshalsea
             "an Array subclass in key position dispatches the subclass #hash",
             allowed: [OBJECT_CLASS]),
 
-      entry(:hash_key_user_class_over_string, HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH[:user_class_over_string],
-            VERDICT_ACCEPT,
-            "precision control: rb_any_hash keys on T_STRING, so a String subclass never " \
-            "reaches a user #hash and rejecting it would be a false positive",
+      entry(:hash_key_bare_array, HASH_KEY_SHAPES_THAT_DISPATCH[:bare_array], VERDICT_REJECT,
+            "an array key names no class of its own, but rb_ary_hash hashes every element, " \
+            "so the object inside it dispatches. Both key rules cover this shape, so the " \
+            "verdict alone cannot isolate either; parser_test asserts the hash rule directly",
             allowed: [OBJECT_CLASS]),
-      entry(:hash_key_extended_over_string, HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH[:extended_over_string],
-            VERDICT_ACCEPT,
-            "same exemption when the string is reached through an extend wrapper",
+      entry(:hash_key_nested_bare_array, HASH_KEY_SHAPES_THAT_DISPATCH[:nested_bare_array], VERDICT_REJECT,
+            "one more level of anonymous nesting must not buy the same object a pass",
+            allowed: [OBJECT_CLASS]),
+
+      entry(:hash_key_user_class_over_string, HASH_KEY_SHAPES_THAT_DISPATCH_EQL_ONLY[:user_class_over_string],
+            VERDICT_REJECT,
+            "rb_any_hash fast-paths T_STRING so #hash is skipped, but rb_any_cmp requires " \
+            "klass == rb_cString, so a String subclass reaches a user #eql? on collision",
+            allowed: [OBJECT_CLASS]),
+      entry(:hash_key_extended_over_string, HASH_KEY_SHAPES_THAT_DISPATCH_EQL_ONLY[:extended_over_string],
+            VERDICT_REJECT,
+            "same asymmetry when the string is reached through an extend wrapper",
             allowed: [HOST_CLASS]),
+
       entry(:hash_key_regexp, HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH[:regexp], VERDICT_ACCEPT,
-            "a regexp key names no class, so the payload cannot choose whose #hash runs")
+            "a regexp key names no class, so the payload cannot choose whose #hash runs"),
+      entry(:hash_key_array_of_primitives, HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH[:array_of_primitives],
+            VERDICT_ACCEPT,
+            "precision control: recursing into collection keys must not become a blanket " \
+            "reject on every array"),
+      entry(:hash_key_empty_array, HASH_KEY_SHAPES_THAT_DO_NOT_DISPATCH[:empty_array], VERDICT_ACCEPT,
+            "precision control: an empty collection has no member to dispatch anything"),
+
+      entry(:range_with_object_endpoints, RANGE_WITH_OBJECT_ENDPOINTS, VERDICT_REJECT,
+            "range_loader calls range_init, which compares the endpoints, so <=> runs during " \
+            "load on a stream carrying no sink tag and no hash key",
+            allowed: [OBJECT_CLASS, RANGE_CLASS]),
+      entry(:range_with_primitive_endpoints, RANGE_WITH_PRIMITIVE_ENDPOINTS, VERDICT_ACCEPT,
+            "precision control: primitive endpoints reach only the builtin <=>",
+            allowed: [RANGE_CLASS])
     ].freeze
   end
 end

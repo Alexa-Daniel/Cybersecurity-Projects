@@ -18,7 +18,7 @@ module Marshalsea
       end
 
       def all
-        @registry.reject { |chain| chain == Base }
+        registry
       end
 
       def find(name)
@@ -34,4 +34,5 @@ module Marshalsea
 end
 
 require_relative "chains/base"
-require_relative "chains/erb_def_method"
+
+Dir[File.join(__dir__, "chains", "*.rb")].each { |chain| require chain }

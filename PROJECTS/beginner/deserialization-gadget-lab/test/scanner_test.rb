@@ -3,6 +3,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "tmpdir"
 
 module Marshalsea
   class ScannerTest < Minitest::Test
@@ -142,12 +143,17 @@ module Marshalsea
       assert(report.candidates.all? { |c| c.class_name.start_with?("Marshalsea::ScannerTest") })
     end
 
-    def test_report_partitions_gated_and_ungated
+    def test_report_partitions_every_candidate_by_gate
       report = local_scan
-      refute_empty report.gated, "a partition test proves nothing if one side is empty"
-      refute_empty report.ungated, "a partition test proves nothing if one side is empty"
-      assert_equal report.candidates.length, report.gated.length + report.ungated.length
-      assert_empty(report.gated & report.ungated)
+      soft = report.candidates.select(&:soft_gated?)
+      buckets = { gated: report.gated, ungated: report.ungated, links: report.links, soft: soft }
+
+      buckets.except(:soft).each do |name, bucket|
+        refute_empty bucket, "a partition test proves nothing if #{name} is empty"
+      end
+      assert_equal report.candidates.length, buckets.values.sum(&:length),
+                   "every gate value must land in exactly one bucket, or a candidate is invisible"
+      buckets.values.combination(2) { |left, right| assert_empty(left & right) }
     end
 
     def test_scan_is_deterministic
@@ -281,7 +287,9 @@ module Marshalsea
     end
 
     def test_control_an_unreadable_candidate_is_reachable_on_exactly_that_basis
-      unreadable = scan.candidates.select(&:unreadable_source?).reject(&:gated?).select(&:zero_arity?)
+      unreadable = scan.candidates.select(&:unreadable_source?)
+                       .select(&:entry_point?).reject(&:gated?).reject(&:soft_gated?)
+                       .select(&:accepts_dispatch?)
 
       refute_empty unreadable, "control: without one of these the previous test is vacuous"
       assert(unreadable.all?(&:reachable?),
@@ -330,6 +338,116 @@ module Marshalsea
         assert_equal 3, by_site.keys.length
         assert(by_site.keys.all? { |site| Scanner::SITES.include?(site) })
       end
+    end
+
+    def test_a_gated_hook_that_cannot_accept_the_call_is_not_reachable
+      wrong = candidates_for("Marshalsea::ScannerTest::WrongArityFixture").first
+      right = candidates_for("Marshalsea::ScannerTest::GatedFixture").first
+
+      assert_equal 0, wrong.arity
+      refute_predicate wrong, :accepts_dispatch?,
+                       "Marshal.load calls marshal_load with one argument, so an arity-0 hook " \
+                       "raises ArgumentError and the chain is dead"
+      refute_predicate wrong, :reachable?
+      assert_predicate right, :accepts_dispatch?, "control: the arity-1 hook must still qualify"
+      assert_predicate right, :reachable?
+    end
+
+    def test_an_ungated_entry_point_that_takes_an_argument_is_still_reachable
+      candidate = candidates_for("Marshalsea::ScannerTest::ComparableFixture").first
+
+      assert_equal "<=>", candidate.method_name
+      assert_equal 1, candidate.arity
+      refute_predicate candidate, :zero_arity?
+      assert_predicate candidate, :reachable?,
+                       "Range#marshal_load supplies the argument, so arity 1 is what <=> must " \
+                       "have, not a reason to drop it"
+    end
+
+    def test_a_link_method_is_recorded_and_never_called_an_entry_point
+      candidate = candidates_for("Marshalsea::ScannerTest::LinkFixture").first
+
+      assert_equal "to_s", candidate.method_name
+      assert_predicate candidate, :link?
+      refute_predicate candidate, :entry_point?
+      refute_predicate candidate, :reachable?,
+                       "research 02 4.2 verified Marshal.load never invokes to_s directly, so " \
+                       "reporting it as reachable is a false positive"
+      assert_includes local_scan.links.map(&:to_s), "Marshalsea::ScannerTest::LinkFixture#to_s",
+                      "a link is how a chain continues and must not be discarded either"
+    end
+
+    def test_a_private_singleton_load_is_discovered
+      found = candidates_for("Marshalsea::ScannerTest::PrivateLoadFixture")
+
+      assert_equal ["_load"], found.map(&:method_name),
+                   "Marshal.load reaches _load through rb_funcallv, which ignores visibility"
+      assert_predicate found.first, :gated?
+      assert_predicate found.first, :reachable?
+    end
+
+    def test_control_a_public_singleton_load_is_still_discovered
+      assert_includes candidates_for("Marshalsea::ScannerTest::UserDefFixture").map(&:method_name),
+                      "_load"
+    end
+
+    BROKEN_SOURCE_PATH = File.join(Dir.tmpdir, "marshalsea-broken-fixture.rb")
+
+    File.write(BROKEN_SOURCE_PATH, "class Unterminated\n  def hash\n    \"open\n")
+    Object.class_eval(<<~SOURCE, BROKEN_SOURCE_PATH, 2)
+      module Marshalsea
+        module ScannerRecoveredFixture
+          class Recovered
+            def hash
+              @seed.to_i
+            end
+          end
+        end
+      end
+    SOURCE
+
+    def test_a_recovered_prism_parse_is_a_suppression_not_a_verdict
+      report = scan(namespace: "Marshalsea::ScannerRecoveredFixture")
+      candidate = report.candidates.first
+
+      assert_equal 1, suppressions_at(report, Scanner::SITE_SOURCE_PARSE).length,
+                   "Prism is error tolerant, so a file it could not parse must be counted"
+      refute_predicate candidate, :state_known?,
+                       "a tree recovered from syntax errors cannot support a true or false verdict"
+      assert_predicate candidate, :unreadable_source?
+      assert_predicate candidate, :reachable?, "an unreadable source must fail open"
+    end
+
+    def test_control_prism_really_does_recover_a_definition_from_that_file
+      parsed = Prism.parse_file(BROKEN_SOURCE_PATH)
+
+      assert_predicate parsed, :failure?
+      refute_empty parsed.errors
+      refute_nil parsed.value,
+                 "control: if Prism returned nothing there would be no wrong verdict to prevent"
+    end
+
+    class WrongArityFixture
+      def marshal_load; end
+    end
+
+    class ComparableFixture
+      def <=>(other)
+        @seed <=> other
+      end
+    end
+
+    class LinkFixture
+      def to_s
+        @seed.to_s
+      end
+    end
+
+    class PrivateLoadFixture
+      def self._load(_data)
+        allocate
+      end
+      private_class_method :_load
     end
 
     class ExplodingNameFixture

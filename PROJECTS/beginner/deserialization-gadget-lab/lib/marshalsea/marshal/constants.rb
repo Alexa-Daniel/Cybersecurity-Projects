@@ -68,7 +68,12 @@ module Marshalsea
       ROLE_STRUCT = "struct member"
       ROLE_BIGNUM = "bignum word"
 
+      ROLE_ANOMALY = "%s name slot holds %s, not a symbol"
+
       CLASS_NAME_TYPES = %i[symbol symlink].freeze
+
+      RANGE_CLASS_NAME = "Range"
+      RANGE_ENDPOINT_IVARS = %i[begin end].freeze
 
       REGISTERED_WRAPPER_TYPES = %i[data].freeze
 

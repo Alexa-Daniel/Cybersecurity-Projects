@@ -103,7 +103,7 @@ echo "  rake release would tag: ${release_tag}"
 echo "release_tag_is_namespaced=$([[ ${release_tag} == "marshalsea-v${gem_version}" ]] && echo true || echo false)" | record
 
 bare_tag="$(run -v "${HERE}:/app:ro" -w /tmp "${BUILD_IMAGE}" sh -c '
-    cp -r /app/lib /app/marshalsea.gemspec /app/README.md /app/CHANGELOG.md /app/LICENSE /tmp/ 2>/dev/null
+    cp -r /app/lib /app/marshalsea.gemspec /app/README.md /app/LICENSE /tmp/ 2>/dev/null
     printf "require \"rake\"\nrequire \"bundler/gem_tasks\"\n" >/tmp/Rakefile
     ruby -e "require \"rake\"; load \"Rakefile\"; print Bundler::GemHelper.instance.send(:version_tag)"
 ' 2>/dev/null)"
@@ -112,7 +112,8 @@ echo
 
 echo "=== 5 the floor is measured, not asserted ==="
 suite_status=0
-for suite in marshal/parser_test scanner_test chains_test marshal/boundary_detector_test corpus_test; do
+for suite in marshal/parser_test scanner_test chains_test marshal/boundary_detector_test \
+             marshal/load_guard_test psych/inspector_test corpus_test; do
     if ! docker run --rm --network none -v "${HERE}:/app:ro" -w /app "${FLOOR_IMAGE}" \
         ruby -Ilib -Itest "test/${suite}.rb" >/dev/null 2>&1; then
         echo "  ${suite} is RED on the floor image"
@@ -167,14 +168,14 @@ Gem::Specification.new do |spec|
   spec.homepage = "https://github.com/CarterPerez-dev/Cybersecurity-Projects"
   spec.license = "AGPL-3.0-or-later"
   spec.required_ruby_version = ">= 3.4"
-  spec.files = Dir["lib/**/*.rb", "target/**/*", "README.md", "CHANGELOG.md", "LICENSE"]
+  spec.files = Dir["lib/**/*.rb", "target/**/*", "README.md", "LICENSE"]
   spec.require_paths = ["lib"]
 end
 SPEC
 
 run -v "${HERE}:/src:ro" -v "${WORK}/ships-target:/out" -w /out "${BUILD_IMAGE}" sh -c '
     set -e
-    tar -C /src -cf - lib target README.md CHANGELOG.md LICENSE | tar -xf -
+    tar -C /src -cf - lib target README.md LICENSE | tar -xf -
     gem build marshalsea.gemspec
 ' >/dev/null 2>&1
 

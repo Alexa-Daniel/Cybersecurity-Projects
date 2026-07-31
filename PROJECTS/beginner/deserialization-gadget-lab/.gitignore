@@ -1,11 +1,8 @@
 # ©AngelaMos | 2026
 # .gitignore
 
-# Dev-only docs (research / plans / context / handoffs) never ship to the public repo
+# Dev-only docs
 docs/
-
-# Agent briefing, local only
-AGENTS.md
 
 # Ruby build + dependency artifacts
 *.gem

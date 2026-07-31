@@ -8,7 +8,7 @@ Gem::Specification.new do |spec|
   spec.name = "marshalsea"
   spec.version = Marshalsea::VERSION
   spec.authors = ["Carter Perez"]
-  spec.email = ["carterperez2222@gmail.com"]
+  spec.email = ["carterperez@angelamos.com"]
 
   spec.summary = "Ruby object-deserialization security lab: inspect, understand, and defend against gadget chains"
   spec.description = "marshalsea parses Ruby Marshal streams without deserializing them, discovers " \
@@ -22,7 +22,6 @@ Gem::Specification.new do |spec|
   spec.metadata = {
     "source_code_uri" => "#{spec.homepage}/tree/main/PROJECTS/beginner/deserialization-gadget-lab",
     "bug_tracker_uri" => "#{spec.homepage}/issues",
-    "changelog_uri" => "#{spec.homepage}/blob/main/PROJECTS/beginner/deserialization-gadget-lab/CHANGELOG.md",
     "documentation_uri" => "#{spec.homepage}/tree/main/PROJECTS/beginner/deserialization-gadget-lab/learn",
     "rubygems_mfa_required" => "true"
   }
@@ -30,7 +29,6 @@ Gem::Specification.new do |spec|
   spec.files = Dir[
     "lib/**/*.rb",
     "README.md",
-    "CHANGELOG.md",
     "LICENSE"
   ]
 

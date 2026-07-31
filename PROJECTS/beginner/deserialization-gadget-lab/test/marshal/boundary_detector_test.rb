@@ -138,6 +138,56 @@ module Marshalsea
         assert_raises(ArgumentError) { detector(policy: :yolo) }
       end
 
+      def role_anomaly_streams
+        {
+          "ivar name is a fixnum" => AdversarialCorpus.stream("I#{AdversarialCorpus.str('a')}\x06i\x060"),
+          "ivar name is a string" =>
+            AdversarialCorpus.stream("I#{AdversarialCorpus.str('a')}\x06#{AdversarialCorpus.str('n')}0"),
+          "ivar name is an array" => AdversarialCorpus.stream("I#{AdversarialCorpus.str('a')}\x06[\x000")
+        }
+      end
+
+      def ruby_refuses?(bytes)
+        ::Marshal.load(bytes)
+        false
+      rescue ArgumentError, TypeError
+        true
+      end
+
+      def test_no_stream_the_loader_refuses_is_ever_waved_through
+        refused = role_anomaly_streams.select { |_label, bytes| ruby_refuses?(bytes) }
+        assert_equal role_anomaly_streams.keys, refused.keys,
+                     "control: these fixtures exist because Marshal.load refuses them"
+
+        waved = role_anomaly_streams.select { |_label, bytes| detector.inspect_stream(bytes).proceed? }
+        assert_empty waved.keys,
+                     "proceed? means the caller may load these bytes, and loading them raises. " \
+                     "The defended route then answers 500 instead of a rejection: #{waved.keys.join(', ')}"
+      end
+
+      def test_a_role_anomaly_is_named_rather_than_reported_as_a_parse_failure
+        decision = detector.inspect_stream(role_anomaly_streams.fetch("ivar name is a fixnum"))
+
+        assert_predicate decision, :blocked?
+        assert_includes decision.reason, "instance variable name slot holds fixnum"
+        refute_includes decision.reason, "Error",
+                        "the parser accepted this on purpose so a hidden sink stays visible; " \
+                        "the reason must say what is wrong, not pretend parsing failed"
+      end
+
+      def test_the_parser_still_returns_a_graph_for_a_role_anomaly
+        result = Parser.new(role_anomaly_streams.fetch("ivar name is an array")).parse
+
+        refute_predicate result, :canonical_roles?
+        assert_equal 1, result.role_anomalies.length
+        refute_nil result.root, "the forensic graph must survive so a hidden sink stays reportable"
+      end
+
+      def test_a_canonical_stream_carries_no_role_anomaly
+        assert_predicate Parser.new(benign_blob).parse, :canonical_roles?,
+                         "control: an ordinary stream must not trip the role check"
+      end
+
       def test_rejects_malformed_stream_with_a_named_reason
         decision = detector.inspect_stream("\x04\x08[\xFA")
         assert_predicate decision, :blocked?

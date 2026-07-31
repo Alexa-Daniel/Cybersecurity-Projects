@@ -74,10 +74,12 @@ module Marshalsea
         @max_struct_members = max_struct_members
       end
 
+      STACK_SAFE_MAX_DEPTH = Constants::DEFAULT_MAX_DEPTH
+
       def self.permissive
         new(
           max_bytes: UNBOUNDED,
-          max_depth: Constants::DEFAULT_MAX_DEPTH,
+          max_depth: STACK_SAFE_MAX_DEPTH,
           max_nodes: UNBOUNDED,
           max_registered_objects: UNBOUNDED,
           max_symbol_definitions: UNBOUNDED,

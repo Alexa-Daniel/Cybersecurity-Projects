@@ -18,6 +18,7 @@ module Marshalsea
         @position = 0
         @symbols = []
         @objects = []
+        @role_anomalies = []
       end
 
       def parse
@@ -26,7 +27,8 @@ module Marshalsea
         raise TrailingBytesError, "#{remaining} unread bytes" unless remaining.zero?
 
         root.each(&:seal)
-        Result.new(root, major: @major, minor: @minor).freeze
+        Result.new(root, major: @major, minor: @minor,
+                         role_anomalies: @role_anomalies.freeze).freeze
       end
 
       private
@@ -194,7 +196,7 @@ module Marshalsea
 
       def read_regexp(tag)
         node = Node.new(type: :regexp, tag: tag, value: read_counted_bytes)
-        take(1)
+        node.regexp_options = take_byte
         node
       end
 
@@ -218,6 +220,12 @@ module Marshalsea
         pair
       end
 
+      def note_role_anomaly(role, node)
+        return if CLASS_NAME_TYPES.include?(node.type)
+
+        @role_anomalies << format(ROLE_ANOMALY, role, node.type).freeze
+      end
+
       def read_class_name(node, depth)
         class_node = read_value(depth)
         unless CLASS_NAME_TYPES.include?(class_node.type)
@@ -236,9 +244,11 @@ module Marshalsea
         count.times do
           name = read_value(depth + 1)
           value = read_value(depth + 1)
+          note_role_anomaly(ROLE_IVAR, name)
           node.auxiliary << name
           node.auxiliary << value
           node.instance_variables_map[name.value] = value
+          node.instance_variable_pairs << [name, value].freeze
         end
         node
       end
@@ -258,7 +268,11 @@ module Marshalsea
         read_class_name(node, depth + 1)
         count = read_entry_count(ROLE_STRUCT)
         budget.struct_members!(count)
-        count.times { node.children << read_pair(depth) }
+        count.times do
+          pair = read_pair(depth)
+          note_role_anomaly(ROLE_STRUCT, pair.children.first)
+          node.children << pair
+        end
         node
       end
 

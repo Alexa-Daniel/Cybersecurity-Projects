@@ -17,8 +17,14 @@ module Marshalsea
       REASON_MALFORMED = "stream is not canonical Marshal: %s"
       REASON_SINK = "stream reaches %s#%s during load, before any allowlist can run"
       REASON_UNAPPROVED = "stream references unapproved class %s"
-      REASON_KEY_DISPATCH = "stream puts %s in a hash key, so its #hash and #eql? run during " \
-                            "load, before any allowlist can act"
+      REASON_ROLE_ANOMALY = "stream is not canonical Marshal: %s, so Marshal.load refuses it " \
+                            "and there is nothing here to permit"
+      REASON_KEY_HASH = "stream puts %s in a hash key, so its #hash runs during load, before " \
+                        "any allowlist can act"
+      REASON_KEY_EQL = "stream puts %s in a hash key, so its #eql? runs during load as soon as " \
+                       "two keys collide, before any allowlist can act"
+      REASON_RANGE_ENDPOINT = "stream puts %s in a Range endpoint, so its #<=> runs during " \
+                              "load, before any allowlist can act"
       REASON_NONCANONICAL_VERSION = "stream declares Marshal %d.%d; every Ruby that can produce " \
                                     "this format emits %d.%d"
 
@@ -134,11 +140,20 @@ module Marshalsea
       end
 
       def violation_for(result)
+        anomaly = result.role_anomalies.first
+        return format(REASON_ROLE_ANOMALY, anomaly) if anomaly
+
         sink = result.sinks.first
         return format(REASON_SINK, quoted(sink.class_name), sink.sink_method) if sink
 
-        key = result.dispatching_hash_keys.first
-        return format(REASON_KEY_DISPATCH, quoted(key.effective_class_name)) if key
+        hashed = result.hash_dispatching_keys.first
+        return format(REASON_KEY_HASH, quoted(hashed.effective_class_name)) if hashed
+
+        compared = result.eql_dispatching_keys.first
+        return format(REASON_KEY_EQL, quoted(compared.effective_class_name)) if compared
+
+        endpoint = result.range_endpoint_dispatchers.first
+        return format(REASON_RANGE_ENDPOINT, quoted(endpoint.effective_class_name)) if endpoint
 
         return nil if policy == POLICY_DENY_SINKS_ONLY
 

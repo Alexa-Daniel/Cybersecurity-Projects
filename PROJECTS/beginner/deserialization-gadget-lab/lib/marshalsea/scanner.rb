@@ -3,13 +3,47 @@
 # frozen_string_literal: true
 
 module Marshalsea
-  class Scanner
-    GATED_METHODS = %w[marshal_load _load_data].freeze
-    GATED_SINGLETON_METHODS = %w[_load].freeze
-    UNGATED_METHODS = %w[hash eql? == <=> []= to_s method_missing respond_to_missing? coerce].freeze
+  class ParseRecoveredError < StandardError
+    def initialize(errors)
+      super("Prism recovered an incomplete tree from #{errors} syntax errors")
+    end
+  end
 
+  class Scanner
     GATE_GATED = :gated
+    GATE_SOFT = :soft
     GATE_UNGATED = :ungated
+    GATE_LINK = :link
+
+    FORMAT_MARSHAL = :marshal
+    FORMAT_PSYCH = :psych
+
+    VARIADIC = -1
+
+    ENTRY_POINTS = {
+      "marshal_load" => { gate: GATE_GATED, arity: 1, formats: [FORMAT_MARSHAL, FORMAT_PSYCH] },
+      "_load_data" => { gate: GATE_GATED, arity: 1, formats: [FORMAT_MARSHAL] },
+      "_load" => { gate: GATE_GATED, arity: 1, formats: [FORMAT_MARSHAL], singleton: true },
+      "init_with" => { gate: GATE_SOFT, arity: 1, formats: [FORMAT_PSYCH] },
+      "hash" => { gate: GATE_UNGATED, arity: 0, formats: [FORMAT_MARSHAL, FORMAT_PSYCH] },
+      "eql?" => { gate: GATE_UNGATED, arity: 1, formats: [FORMAT_MARSHAL, FORMAT_PSYCH] },
+      "<=>" => { gate: GATE_UNGATED, arity: 1, formats: [FORMAT_MARSHAL] },
+      "==" => { gate: GATE_UNGATED, arity: 1, formats: [FORMAT_PSYCH] },
+      "[]=" => { gate: GATE_UNGATED, arity: 2, formats: [FORMAT_PSYCH] },
+      "method_missing" => { gate: GATE_UNGATED, arity: VARIADIC, formats: [FORMAT_MARSHAL, FORMAT_PSYCH] },
+      "respond_to_missing?" => { gate: GATE_UNGATED, arity: 2, formats: [FORMAT_MARSHAL, FORMAT_PSYCH] },
+      "respond_to?" => { gate: GATE_UNGATED, arity: VARIADIC, formats: [FORMAT_PSYCH] },
+      "to_s" => { gate: GATE_LINK, arity: 0, formats: [] },
+      "coerce" => { gate: GATE_LINK, arity: 1, formats: [] }
+    }.freeze
+
+    GATED_METHODS = ENTRY_POINTS.select { |_, spec| spec[:gate] == GATE_GATED && !spec[:singleton] }
+                                .keys.freeze
+    GATED_SINGLETON_METHODS = ENTRY_POINTS.select { |_, spec| spec[:singleton] }.keys.freeze
+    UNGATED_METHODS = ENTRY_POINTS.select { |_, spec| spec[:gate] == GATE_UNGATED }.keys.freeze
+    LINK_METHODS = ENTRY_POINTS.select { |_, spec| spec[:gate] == GATE_LINK }.keys.freeze
+    INSTANCE_METHODS = ENTRY_POINTS.reject { |_, spec| spec[:singleton] }.keys.freeze
+    SINGLETON_METHODS = GATED_SINGLETON_METHODS
 
     PRISM_AVAILABLE = begin
       require "prism"
@@ -39,9 +73,10 @@ module Marshalsea
     SUBJECT_UNNAMED = "(module that cannot report a name)"
 
     class Candidate
-      attr_reader :class_name, :method_name, :gate, :source_location, :arity
+      attr_reader :class_name, :method_name, :gate, :source_location, :arity, :formats
 
-      def initialize(class_name:, method_name:, gate:, source_location:, arity:, singleton:, touches_state:)
+      def initialize(class_name:, method_name:, gate:, source_location:, arity:, singleton:,
+                     touches_state:, formats:)
         @class_name = class_name
         @method_name = method_name
         @gate = gate
@@ -49,6 +84,7 @@ module Marshalsea
         @arity = arity
         @singleton = singleton
         @touches_state = touches_state
+        @formats = formats
       end
 
       def singleton?
@@ -57,6 +93,30 @@ module Marshalsea
 
       def gated?
         gate == GATE_GATED
+      end
+
+      def soft_gated?
+        gate == GATE_SOFT
+      end
+
+      def link?
+        gate == GATE_LINK
+      end
+
+      def entry_point?
+        !link?
+      end
+
+      def dispatch_arity
+        ENTRY_POINTS.fetch(method_name).fetch(:arity)
+      end
+
+      def accepts_dispatch?
+        required = dispatch_arity
+        return true if required == VARIADIC
+        return arity == required unless arity.negative?
+
+        required >= (arity.abs - 1)
       end
 
       def zero_arity?
@@ -80,8 +140,9 @@ module Marshalsea
       end
 
       def reachable?
-        return true if gated?
-        return false unless zero_arity?
+        return false unless entry_point?
+        return false unless accepts_dispatch?
+        return true if gated? || soft_gated?
 
         touches_state? || unreadable_source?
       end
@@ -149,11 +210,23 @@ module Marshalsea
       end
 
       def ungated
-        candidates.reject(&:gated?)
+        candidates.select { |candidate| candidate.gate == GATE_UNGATED }
+      end
+
+      def links
+        candidates.select(&:link?)
+      end
+
+      def entry_points
+        candidates.select(&:entry_point?)
       end
 
       def reachable
         candidates.select(&:reachable?)
+      end
+
+      def reachable_in(format)
+        reachable.select { |candidate| candidate.formats.include?(format) }
       end
 
       def prism_available?
@@ -210,27 +283,29 @@ module Marshalsea
     end
 
     def collect_instance_methods(mod, name)
-      own = own_instance_methods(mod, name)
-
-      (own & GATED_METHODS).each do |method_name|
-        record(mod, name, method_name, GATE_GATED, singleton: false)
-      end
-
-      (own & UNGATED_METHODS).each do |method_name|
-        record(mod, name, method_name, GATE_UNGATED, singleton: false)
+      (own_instance_methods(mod, name) & INSTANCE_METHODS).each do |method_name|
+        record(mod, name, method_name, singleton: false)
       end
     end
 
     def collect_singleton_methods(mod, name)
-      own = mod.singleton_methods(false).map(&:to_s)
-
-      (own & GATED_SINGLETON_METHODS).each do |method_name|
-        record(mod, name, method_name, GATE_GATED, singleton: true)
+      (own_singleton_methods(mod, name) & SINGLETON_METHODS).each do |method_name|
+        record(mod, name, method_name, singleton: true)
       end
     end
 
     def own_instance_methods(mod, name)
-      (mod.instance_methods(false) + mod.private_instance_methods(false)).map(&:to_s)
+      (mod.instance_methods(false) +
+       mod.private_instance_methods(false) +
+       mod.protected_instance_methods(false)).map(&:to_s)
+    rescue StandardError => e
+      suppress(SITE_OWN_METHODS, name, e)
+      []
+    end
+
+    def own_singleton_methods(mod, name)
+      (mod.singleton_methods(false) +
+       mod.singleton_class.private_instance_methods(false)).map(&:to_s)
     rescue StandardError => e
       suppress(SITE_OWN_METHODS, name, e)
       []
@@ -240,17 +315,19 @@ module Marshalsea
       "#{name}#{singleton ? '.' : '#'}#{method_name}"
     end
 
-    def record(mod, name, method_name, gate, singleton:)
-      handle = singleton ? mod.singleton_method(method_name) : mod.instance_method(method_name)
+    def record(mod, name, method_name, singleton:)
+      spec = ENTRY_POINTS.fetch(method_name)
+      handle = singleton ? mod.singleton_class.instance_method(method_name) : mod.instance_method(method_name)
 
       @candidates << Candidate.new(
         class_name: name,
         method_name: method_name,
-        gate: gate,
+        gate: spec.fetch(:gate),
         source_location: format_location(handle.source_location),
         arity: handle.arity,
         singleton: singleton,
-        touches_state: state_reference_in(handle, qualified(name, method_name, singleton))
+        touches_state: state_reference_in(handle, qualified(name, method_name, singleton)),
+        formats: spec.fetch(:formats)
       )
     rescue StandardError, ScriptError => e
       suppress(SITE_CANDIDATE, qualified(name, method_name, singleton), e)
@@ -288,8 +365,14 @@ module Marshalsea
     end
 
     def parse_definitions(path)
+      parsed = Prism.parse_file(path)
+      if parsed.failure?
+        suppress(SITE_SOURCE_PARSE, path, ParseRecoveredError.new(parsed.errors.length))
+        return nil
+      end
+
       found = {}
-      collect_definitions(Prism.parse_file(path).value, found)
+      collect_definitions(parsed.value, found)
       found
     rescue StandardError, ScriptError => e
       suppress(SITE_SOURCE_PARSE, path, e)

@@ -120,7 +120,7 @@ failures << "candidates lost" unless check("no candidate was silently dropped",
 
 unreadable = full.candidates.select(&:unreadable_source?)
 fails_open = !unreadable.empty? &&
-             unreadable.all? { |c| c.gated? || !c.zero_arity? || c.reachable? }
+             unreadable.all? { |c| c.gated? || !c.entry_point? || !c.accepts_dispatch? || c.reachable? }
 failures << "unreadable fails open" unless check("an unreadable source fails open, never to inert",
                                                  fails_open,
                                                  "#{unreadable.length} candidates whose source could not be parsed")

@@ -8,8 +8,9 @@ module Marshalsea
       STRING_BACKED_TYPES = %i[string regexp].freeze
       WRAPPER_TYPES = %i[user_class extended].freeze
 
-      attr_reader :type, :tag, :children, :instance_variables_map, :auxiliary, :undecoded_tail
-      attr_accessor :value, :class_name, :link_target
+      attr_reader :type, :tag, :children, :instance_variables_map, :instance_variable_pairs,
+                  :auxiliary, :undecoded_tail
+      attr_accessor :value, :class_name, :link_target, :regexp_options
 
       def initialize(type:, tag: nil, value: nil, class_name: nil, undecoded_tail: nil)
         @type = type
@@ -19,6 +20,7 @@ module Marshalsea
         @undecoded_tail = undecoded_tail
         @children = []
         @instance_variables_map = {}
+        @instance_variable_pairs = []
         @auxiliary = []
       end
 
@@ -39,11 +41,44 @@ module Marshalsea
       end
 
       def dispatches_key_methods?
-        return link_target ? link_target.dispatches_key_methods? : false if type == :object_link
-        return false unless class_name
-        return !string_backed? if WRAPPER_TYPES.include?(type)
+        !hash_dispatcher.nil? || !eql_dispatcher.nil?
+      end
 
-        true
+      def hash_dispatcher(seen = {}.compare_by_identity)
+        return nil if seen.key?(self)
+
+        seen[self] = true
+        return link_target&.hash_dispatcher(seen) if type == :object_link
+        return member_dispatcher(:hash_dispatcher, seen) unless class_name
+        return nil if WRAPPER_TYPES.include?(type) && string_backed?
+
+        self
+      end
+
+      def eql_dispatcher(seen = {}.compare_by_identity)
+        return nil if seen.key?(self)
+
+        seen[self] = true
+        return link_target&.eql_dispatcher(seen) if type == :object_link
+        return member_dispatcher(:eql_dispatcher, seen) unless class_name
+
+        self
+      end
+
+      def member_dispatcher(probe, seen)
+        children.each do |child|
+          found = child.public_send(probe, seen)
+          return found if found
+        end
+        nil
+      end
+
+      def range_endpoints
+        instance_variable_pairs.filter_map do |name, value|
+          next unless Constants::RANGE_ENDPOINT_IVARS.include?(name.value)
+
+          value if value.effective_class_name
+        end
       end
 
       def effective_class_name
@@ -72,21 +107,27 @@ module Marshalsea
         children.freeze
         auxiliary.freeze
         instance_variables_map.freeze
+        instance_variable_pairs.freeze
         freeze
       end
     end
 
     class Result
-      attr_reader :root, :major, :minor
+      attr_reader :root, :major, :minor, :role_anomalies
 
-      def initialize(root, major:, minor:)
+      def initialize(root, major:, minor:, role_anomalies: [])
         @root = root
         @major = major
         @minor = minor
+        @role_anomalies = role_anomalies
       end
 
       def canonical_version?
         major == Constants::MAJOR_VERSION && minor == Constants::MINOR_VERSION
+      end
+
+      def canonical_roles?
+        role_anomalies.empty?
       end
 
       def nodes
@@ -114,6 +155,19 @@ module Marshalsea
 
       def dispatching_hash_keys
         hash_keys.select(&:dispatches_key_methods?)
+      end
+
+      def hash_dispatching_keys
+        hash_keys.filter_map(&:hash_dispatcher)
+      end
+
+      def eql_dispatching_keys
+        hash_keys.filter_map(&:eql_dispatcher)
+      end
+
+      def range_endpoint_dispatchers
+        nodes.select { |node| node.effective_class_name == Constants::RANGE_CLASS_NAME }
+             .flat_map(&:range_endpoints)
       end
     end
   end

@@ -10,6 +10,8 @@ require_relative "marshalsea/marshal/float_body"
 require_relative "marshalsea/marshal/limits"
 require_relative "marshalsea/marshal/parser"
 require_relative "marshalsea/marshal/boundary_detector"
+require_relative "marshalsea/marshal/load_guard"
+require_relative "marshalsea/psych/inspector"
 require_relative "marshalsea/scanner"
 require_relative "marshalsea/chains"
 

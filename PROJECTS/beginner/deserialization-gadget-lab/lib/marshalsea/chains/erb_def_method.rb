@@ -13,11 +13,11 @@ module Marshalsea
       TARGET_GEM = "erb"
 
       AFFECTED = [
-        "< 4.0.3.1",
-        "= 4.0.4",
+        ["< 4.0.3.1"],
+        ["= 4.0.4"],
         [">= 5.0.0", "< 6.0.1.1"],
         [">= 6.0.2", "< 6.0.4"]
-      ].freeze
+      ].map { |constraints| constraints.map(&:freeze).freeze }.freeze
 
       SRC_PREFIX = "#\nend\n"
       SRC_SUFFIX = "\ndef _marshalsea_unused\n"
@@ -30,14 +30,17 @@ module Marshalsea
 
       CANARY_TEMPLATE = "File.write(%<path>p, %<marker>p)"
 
+      METADATA = {
+        name: CHAIN_NAME,
+        vector: VECTOR,
+        cve: CVE,
+        gem: TARGET_GEM,
+        affected: AFFECTED,
+        kind: KIND_PRIMITIVE
+      }.freeze
+
       def self.metadata
-        {
-          name: CHAIN_NAME,
-          vector: VECTOR,
-          cve: CVE,
-          gem: TARGET_GEM,
-          affected: AFFECTED
-        }
+        METADATA
       end
 
       def self.canary(path, marker)
