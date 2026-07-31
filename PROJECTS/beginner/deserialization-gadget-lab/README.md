@@ -15,7 +15,7 @@
 [![Gem](https://img.shields.io/badge/gem-marshalsea-E9573F?style=flat&logo=rubygems&logoColor=white)](https://rubygems.org/gems/marshalsea)
 [![Formats](https://img.shields.io/badge/formats-Marshal%20%2B%20YAML-6D4AFF?style=flat)](#the-two-allowlists)
 [![CVE](https://img.shields.io/badge/CVE--2026--41316-CVSS%208.1-4457E8?style=flat)](https://www.ruby-lang.org/en/news/2026/04/21/erb-cve-2026-41316/)
-[![Tests](https://img.shields.io/badge/tests-267-8B5CF6?style=flat)](#build-and-test)
+[![Tests](https://img.shields.io/badge/tests-268-8B5CF6?style=flat)](#build-and-test)
 [![License: AGPLv3](https://img.shields.io/badge/License-AGPL_v3-purple.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 > A Ruby object-deserialization security lab. It reads `Marshal` and YAML bytes without ever reviving them, tells you which classes are in there and which methods those bytes would fire, hunts your loaded code for the classes that make usable gadgets, builds a working payload for a real 2026 CVE, and then stands up a deliberately vulnerable Sinatra target so you can watch the exploit land over HTTP and watch the defense stop it. It ships as a gem plus a container, and every defense in it comes with a written statement of what it cannot do.
@@ -30,7 +30,7 @@ It is also the bug class the industry most consistently gets wrong in retellings
 
 ## What it is
 
-Not a stub. Every capability below is exercised by 267 tests across seven suites and a six-stage gate that runs real containers, with 78 assertions that must all pass.
+Not a stub. Every capability below is exercised by 268 tests across seven suites and a six-stage gate that runs real containers, with 79 assertions that must all pass.
 
 **A reader that never loads (Marshal)**
 - Parses the Marshal binary format without calling `Marshal.load`: version bytes, type tags, instance variables, object links, symbols, floats
@@ -146,7 +146,7 @@ Every defense here is a trade, and the code says so out loud rather than in a fo
 
 - **A stream that passes inspection is not a safe stream.** `proceed?` means the bytes matched a policy. It does not mean the payload is harmless, and `LIMITATION_NOTICE` says exactly that. The published CVE chain produces **zero sink tags**, so sink detection alone never catches it; only class allowlisting does.
 - **The runtime guard is defense in depth, not a boundary.** Its cost is not a multiplier. Enabling a `TracePoint` costs a near-constant ~46 microseconds per load, so it is 1.0x on a 488 KB document and **40x on a 45-byte session cookie**, and a cookie is what this lab deserializes. It also covers the load window only: a class carrying no hook at all is built freely and fires whenever the application next touches it.
-- **The scanner sees only what is loaded.** `ObjectSpace` cannot report a class nobody has required yet. On a stock image it narrows 119 ungated candidates to 29 reachable, and 135 of its candidates are C-defined with no Ruby source at all, which it reports as `unanalysable` rather than scoring as inert.
+- **The scanner sees only what is loaded.** `ObjectSpace` cannot report a class nobody has required yet. On a stock `ruby:4.0-slim` it narrows 124 ungated candidates to 28 reachable, and 142 of its candidates are C-defined with no Ruby source at all, which it reports as `unanalysable` rather than scoring as inert. Those figures are a statement about what one process had loaded, not about Ruby; re-run `just scan` rather than quoting them.
 - **The gem floor is `>= 3.4` and it was measured, not chosen.** `Marshal.load` did not validate the bignum sign byte until 3.4. The parser accepts `+` and `-` only, so it models 3.4 and newer; run it on 3.3 and it disagrees with the interpreter it exists to model. `just package` re-proves that in both directions on every run.
 
 ## Architecture
