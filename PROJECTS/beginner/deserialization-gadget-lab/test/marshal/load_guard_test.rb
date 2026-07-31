@@ -74,6 +74,8 @@ module Marshalsea
 
       def name_of(klass) = klass.name
 
+      def true_name_of(klass) = LoadGuard::NAME_OF.bind_call(klass)
+
       def key_trigger_blob
         blob = ::Marshal.dump({ KeyTrigger.new => 1 })
         BODIES.clear
@@ -229,12 +231,14 @@ module Marshalsea
         end
       end
 
-      def test_an_owner_that_refuses_to_name_itself_fails_closed
+      def test_an_owner_that_refuses_to_name_itself_is_named_truthfully_anyway
         blob = ::Marshal.dump(HostileName.new)
 
         error = assert_raises(GuardedLoadError) { guard.load(blob) }
-        assert_includes error.message, LoadGuard::ANONYMOUS_OWNER,
-                        "a class that raises from .name must not become permitted by accident"
+        assert_includes error.message, true_name_of(HostileName),
+                        "the guard reads Module#name unbound, so a class that overrides .name " \
+                        "cannot control what the guard calls it"
+        assert_raises(NameError) { name_of(HostileName) }
         assert_empty BODIES
       end
 
@@ -245,6 +249,43 @@ module Marshalsea
           guard(permitted: [LoadGuard::ANONYMOUS_OWNER]).load(blob)
         end
         assert_empty BODIES, "the placeholder must not be spellable as an allowlist entry"
+      end
+
+      class DispatchTattle
+        DISPATCHED = []
+
+        instance_methods.each do |method_name|
+          undef_method(method_name) unless %i[__send__ __id__ object_id].include?(method_name)
+        end
+
+        def marshal_dump = ["payload"]
+
+        def respond_to_missing?(name, _include_private = false) = name == :marshal_load
+
+        def method_missing(name, *args)
+          DISPATCHED << name
+          return BODIES << "DispatchTattle via method_missing" if name == :marshal_load
+
+          super
+        end
+      end
+
+      def test_the_guard_never_dispatches_a_method_on_the_receiver_it_inspects
+        DispatchTattle::DISPATCHED.clear
+        blob = ::Marshal.dump(DispatchTattle.new)
+        DispatchTattle::DISPATCHED.clear
+        BODIES.clear
+
+        error = assert_raises(GuardedLoadError) { guard.load(blob) }
+
+        assert_includes error.message, name_of(DispatchTattle),
+                        "resolving the owner must still produce the real class name"
+        assert_empty BODIES, "the hook body must not run"
+        assert_empty DispatchTattle::DISPATCHED & %i[class is_a? name],
+                     "identifying the receiver must not call a method ON the receiver. A " \
+                     "method-erased proxy answers .class and .is_a? through method_missing, " \
+                     "so a guard that asks the receiver what it is detonates the chain it " \
+                     "was about to veto, inside a TracePoint handler that does not trace itself"
       end
 
       def test_the_error_is_catchable_by_an_ordinary_rescue

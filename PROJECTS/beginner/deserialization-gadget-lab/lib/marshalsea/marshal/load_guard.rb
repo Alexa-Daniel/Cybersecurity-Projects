@@ -19,6 +19,10 @@ module Marshalsea
       REASON = "deserialization hook %s#%s is not permitted"
       ANONYMOUS_OWNER = "(class with no name)"
 
+      CLASS_OF = ::Object.instance_method(:class).freeze
+      KIND_OF = ::Object.instance_method(:is_a?).freeze
+      NAME_OF = ::Module.instance_method(:name).freeze
+
       LIMITATION_NOTICE = <<~NOTICE
         SECURITY LIMITATION
 
@@ -109,8 +113,8 @@ module Marshalsea
       end
 
       def owner_name(receiver)
-        owner = receiver.is_a?(Module) ? receiver : receiver.class
-        name = owner.name
+        owner = KIND_OF.bind_call(receiver, ::Module) ? receiver : CLASS_OF.bind_call(receiver)
+        name = NAME_OF.bind_call(owner)
         name if name.is_a?(String) && !name.empty?
       rescue StandardError
         nil
