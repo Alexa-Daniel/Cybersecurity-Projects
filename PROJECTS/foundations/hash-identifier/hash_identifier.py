@@ -211,6 +211,8 @@ HEX_LENGTH_RULES: dict[int, list[str]] = {
     # other thing that produces 16 hex chars in a security context
     # is a 64-bit CRC, which is rare enough that MySQL323 outranks it
     16: ["MySQL323", "CRC-64"],
+    # 24 hex chars = 12 bytes = 96 bits
+    24: ["Tiger-128"],
     # 32 hex chars = 16 bytes = 128 bits
     32: ["MD5", "NTLM", "MD4", "RIPEMD-128"],
     # 40 hex chars = 20 bytes = 160 bits

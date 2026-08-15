@@ -365,6 +365,16 @@ def test_sha1_length_returns_sha1_first() -> None:
     candidates = identify(sample)
     assert candidates[0].algorithm == "SHA-1"
 
+def test_tiger_128_length_returns_tiger_128_first() -> None:
+    """
+    24 hex chars = Tiger-128
+    """
+
+    sample = "a" * 24
+    candidates = identify(sample)
+
+    assert candidates[0].algorithm == "Tiger-128"
+
 
 # =============================================================================
 # No-match / edge cases
