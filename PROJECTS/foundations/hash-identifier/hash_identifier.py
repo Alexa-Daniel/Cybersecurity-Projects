@@ -59,9 +59,12 @@ import argparse
 # write to stderr and to exit the process with a specific status code.
 import sys
 
+import json
+
 # Standard library: a decorator that turns a class into a small,
 # immutable data record without writing `__init__` boilerplate.
 from dataclasses import dataclass
+from dataclasses import asdict
 
 # Standard library: a type hint that pins a value to a small fixed
 # set of strings (here: "high" / "medium" / "low"). Mypy catches typos.
@@ -595,6 +598,11 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         default = 5,
         help = "Show at most this many candidates (default: 5).",
     )
+    parser.add_argument(
+        "--json",
+        action = "store_true",
+        help = "Get JSON formatted output instead of a table.",
+    )
     return parser
 
 
@@ -663,17 +671,25 @@ def main() -> int:
         )
         return 1
 
-    # Trim to the requested top-N
-    trimmed = candidates[: args.top]
-    _render_table(args.hash, trimmed, console)
+    if args.json:
+        dict_candidates = [asdict(candidate) for candidate in candidates]
+        hash_and_candidates = {
+            "hash": args.hash,
+            "candidates": dict_candidates
+        }
+        console.print_json(data = hash_and_candidates, indent = 2)
+    else:
+        # Trim to the requested top-N
+        trimmed = candidates[: args.top]
+        _render_table(args.hash, trimmed, console)
 
-    # Helpful nudge — point the user at the cracker once they know
-    # what algorithm to target. Foundations tier is meant to chain
-    if trimmed[0].confidence == "high":
-        console.print(
-            "\n[dim]Next step: try the matching cracker mode "
-            "(see ../../beginner/hash-cracker).[/dim]"
-        )
+        # Helpful nudge — point the user at the cracker once they know
+        # what algorithm to target. Foundations tier is meant to chain
+        if trimmed[0].confidence == "high":
+            console.print(
+                "\n[dim]Next step: try the matching cracker mode "
+                "(see ../../beginner/hash-cracker).[/dim]"
+            )
 
     return 0
 
