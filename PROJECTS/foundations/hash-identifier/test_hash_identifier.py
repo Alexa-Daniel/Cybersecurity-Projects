@@ -158,6 +158,19 @@ def test_apr1_prefix_is_recognized() -> None:
     assert candidates[0].algorithm == "Apache MD5-crypt"
     assert candidates[0].confidence == "high"
 
+def test_macOS_prefix_is_recognized() -> None:
+    """
+    macOS / iCloud Keychain hashes start with $ml$
+    """
+
+    sample = "$ml$35460$93a94bd24b5de64d79a5e49fa372827e739f4d7b6975c752c9a0ff1e5cf72e05$752351df64dd2ce9dc9c64a72ad91de6581a15c19176266b44d98919dfa81f0f96cbcb20a1ffb400718c20382030f637892f776627d34e021bad4f81b7de8222"
+    candidates = identify(sample)
+
+    assert candidates
+    assert candidates[0].algorithm == "macOS / iCloud Keychain"
+    assert candidates[0].confidence == "high"
+
+
 
 # =============================================================================
 # Special formats

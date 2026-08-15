@@ -172,6 +172,9 @@ PREFIX_RULES: list[tuple[str, str, str]] = [
     ("bcrypt_sha256$", "Django bcrypt-SHA256", "Django bcrypt wrapper"),
     ("argon2$", "Django Argon2", "Django Argon2 wrapper"),
 
+    # macOS / iCloud Keychain
+    ("$ml$", "macOS / iCloud Keychain", "macOS / iCloud default password hash, comes from Apple PBKDF2-SHA512"),
+
     # LDAP password schemes — base64 payload after the marker
     ("{SSHA}", "LDAP SSHA", "LDAP salted SHA-1 (base64 payload)"),
     ("{SHA}", "LDAP SHA", "LDAP SHA-1 (base64 payload)"),

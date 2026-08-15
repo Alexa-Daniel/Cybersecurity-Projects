@@ -75,7 +75,7 @@ test:
     @echo "Running tests..."
     # `uv run` runs a command inside the project's virtual environment
     # without us having to `source .venv/bin/activate` first.
-    uv run pytest
+    uv run --all-extras pytest
 
 # Run all linters in sequence (ruff + pylint + mypy)
 [group('test')]
