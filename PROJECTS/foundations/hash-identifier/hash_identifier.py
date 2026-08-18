@@ -59,8 +59,6 @@ import argparse
 # write to stderr and to exit the process with a specific status code.
 import sys
 
-import json
-
 # Standard library: a decorator that turns a class into a small,
 # immutable data record without writing `__init__` boilerplate.
 from dataclasses import dataclass
@@ -69,6 +67,8 @@ from dataclasses import asdict
 # Standard library: a type hint that pins a value to a small fixed
 # set of strings (here: "high" / "medium" / "low"). Mypy catches typos.
 from typing import Literal
+
+from pathlib import Path
 
 # Third-party (rich): the printer that actually draws the table to
 # the terminal, with color and Unicode support.
@@ -588,6 +588,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "hash",
+        nargs = "?",
         help =
         "The hash string to identify (wrap in single quotes if it contains $).",
     )
@@ -602,6 +603,11 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         "--json",
         action = "store_true",
         help = "Get JSON formatted output instead of a table.",
+    )
+    parser.add_argument(
+        "--file",
+        type = Path,
+        help = "The path of the file which will have its hashes identified",
     )
     return parser
 
@@ -659,39 +665,77 @@ def main() -> int:
     parser = _build_argument_parser()
     args = parser.parse_args()
     console = Console()
+    
+    
+    raw_lines: list[str] = []
 
-    candidates = identify(args.hash)
-
-    if not candidates:
-        # `[red]...[/red]` is rich's inline color markup
-        console.print(
-            "[red]No identification possible.[/red] "
-            "Input did not match any known prefix, special format, "
-            "or hex length."
-        )
+    if args.hash is not None:
+        raw_lines = [args.hash]
+    elif args.file is not None:
+        raw_lines = args.file.read_text().splitlines()
+    elif not sys.stdin.isatty():
+        raw_lines = sys.stdin.read().splitlines()
+    else:
+        console.print("[red]Error: No input provided.[/red] Please provide a hash, use --file, or pipe data in.")
         return 1
 
-    if args.json:
-        dict_candidates = [asdict(candidate) for candidate in candidates]
-        hash_and_candidates = {
-            "hash": args.hash,
-            "candidates": dict_candidates
-        }
-        console.print_json(data = hash_and_candidates, indent = 2)
-    else:
-        # Trim to the requested top-N
+    # Strip whitespace and drop entirely blank lines to prevent crashes on empty inputs
+    lines = [line.strip() for line in raw_lines if line.strip()]
+    if not lines:
+        return 0
+
+    results = []
+    
+    for raw_hash in lines:
+        candidates = identify(raw_hash)
         trimmed = candidates[: args.top]
-        _render_table(args.hash, trimmed, console)
+        results.append({
+            "hash": raw_hash,
+            "candidates": trimmed,
+            "dict_candidates": [asdict(c) for c in trimmed] # Pre-build JSON format
+        })
 
-        # Helpful nudge — point the user at the cracker once they know
-        # what algorithm to target. Foundations tier is meant to chain
-        if trimmed[0].confidence == "high":
-            console.print(
-                "\n[dim]Next step: try the matching cracker mode "
-                "(see ../../beginner/hash-cracker).[/dim]"
-            )
+    # Track exit code (if a single hash was queried but found nothing, return 1)
+    exit_code = 1 if (len(results) == 1 and not results[0]["candidates"]) else 0
 
-    return 0
+    if args.json:
+        # Build the exact JSON structure we want
+        json_data = [{"hash": r["hash"], "candidates": r["dict_candidates"]} for r in results]
+        
+        # If it's a single item, unwrap it from the list so the JSON looks cleaner
+        if len(json_data) == 1:
+            console.print_json(data=json_data[0], indent=2)
+        else:
+            console.print_json(data=json_data, indent=2)
+
+    else:
+        if len(results) == 1:
+            # Single-item -> rich table
+            res = results[0]
+            if not res["candidates"]:
+                console.print(
+                    "[red]No identification possible.[/red] "
+                    "Input did not match any known prefix, special format, "
+                    "or hex length."
+                )
+            else:
+                _render_table(res["hash"], res["candidates"], console)
+                if res["candidates"][0].confidence == "high":
+                    console.print(
+                        "\n[dim]Next step: try the matching cracker mode "
+                        "(see ../../beginner/hash-cracker).[/dim]"
+                    )
+        else:
+            # Multi-item -> textual representation
+            for res in results:
+                print(f"{res['hash']}:")
+                if not res["candidates"]:
+                    print("  No identification possible.")
+                for candidate in res["candidates"]:
+                    print(f"  Algorithm: {candidate.algorithm}, Confidence: {candidate.confidence}, Reason: {candidate.reason}")
+                print()
+
+    return exit_code
 
 
 # Standard "if invoked directly as a script" guard — lets the file be
