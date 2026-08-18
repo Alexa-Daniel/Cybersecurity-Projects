@@ -1,0 +1,23 @@
+# 1. Standard Hex Hashes (Should return modes 0, 100, 1400, etc.)
+8743b52063cd84097a65d1633f5c74f5
+110d2d3460662d5140df0d8a57bb2d8bc98a00dd
+12795ec563bd29afc6bc1e285eb6ce01e3cb3c2bc8041c2c5101a0cb8b4220b3
+
+# 2. Linux/Unix Crypts (Should return 1800, 7400, 500, 8900)
+$6$52450745$k5ka2p8bFuSmoVT1tzOyyuaREkkKBcCNqoDKzYm.QOIFsVQktG4gAIfH4hB3R5sU9D0Z8g.7bB329q5mXkUq8/
+$5$rounds=5000$usesomesillystri$KqJWpanXZHKq2BOB43TSaYhEWsQ1Lr5QNcKe/ptAp9s
+$1$someseed$26LLHzJ.O0u0bC9fA35eE1
+$y$j9T$123456789012345678901$1234567890123456789012345678901234567890123
+
+# 3. Modern Key Derivation (Should return 3200, 34000)
+$2a$05$Lhazcg/I1Xj.v7rK8j0vPeI.2T5ZfL7bA4wFwMhE.V//L/9EaP.kO
+$argon2id$v=19$m=65536,t=3,p=4$some_salt$some_hash_data_here
+
+# 4. Web Frameworks - Django & CMS (Should return 10000, 400, 7900)
+pbkdf2_sha256$260000$salt$hash_data
+$P$9123456789012345678901234567890
+$S$D123456789012345678901234567890123456789012345678901
+
+# 5. Enterprise / LDAP (Should return 111, 101, etc.)
+{SSHA}bXlzYWx0cGFzc3dvcmQ=
+{MD5}dGVzdHBhc3N3b3Jk

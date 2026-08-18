@@ -63,6 +63,7 @@ import sys
 # immutable data record without writing `__init__` boilerplate.
 from dataclasses import dataclass
 from dataclasses import asdict
+from functools import cache
 
 # Standard library: a type hint that pins a value to a small fixed
 # set of strings (here: "high" / "medium" / "low"). Mypy catches typos.
@@ -114,10 +115,48 @@ class HashCandidate:
     reason
         Short explanation we display next to the algorithm name. Keeps
         the output debuggable — the user can see WHY each guess fired
+    hashcat_mode
+        The numerical mode value that hashcat takes for this specific algorithm
     """
     algorithm: str
     confidence: Confidence
     reason: str
+    hashcat_mode: int | None = None
+    
+# =============================================================================
+# Hashcat modes - maps algorithms to their hashcat mode numerical value
+# =============================================================================
+
+HASHCAT_MODES: dict[str, int] = {
+    "MD5": 0,
+    "SHA1": 100,
+    "MySQL323": 200,
+    "NTLM": 1000,
+    "MD4": 900,
+    "RIPEMD-160": 6000,
+    "SHA3-224": 17300,
+    "SHA-256": 1400,
+    "SHA3-256": 17400,
+    "BLAKE2s-256": 31000,
+    "RIPEMD-320": 33600,
+    "SHA3-384": 17500,
+    "SHA-512": 1700,
+    "SHA3-512": 17600,
+    "BLAKE2b-512": 600,
+    "Whirlpool": 6100,
+    "Argon2id": 34000,
+    "Argon2i": 34000,
+    "Argon2d": 34000,
+    "bcrypt": 3200,
+    "SHA-512 crypt": 1800,
+    "SHA-256 crypt": 7400,
+    "MD5 crypt": 500,
+    "Apache MD5-crypt": 1600,
+    "yescrypt": 8900,
+    "scrypt": 8900,
+    "phpass": 400,
+    "Drupal 7 (SHA-512)": 7900
+}
 
 
 # =============================================================================
@@ -234,6 +273,9 @@ HEX_LENGTH_RULES: dict[int, list[str]] = {
     128: ["SHA-512", "SHA3-512", "BLAKE2b-512", "Whirlpool"],
 }
 
+BASE58_CHARS = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+BASE32_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+
 
 # =============================================================================
 # Helpers
@@ -329,7 +371,7 @@ def _is_descrypt(text: str) -> bool:
 # here as a deliberate teaching choice and silence the two warnings
 # pylint: disable=too-many-return-statements,too-many-branches
 
-
+@cache
 def identify(raw_input: str) -> list[HashCandidate]:
     """
     Return ranked candidates for what algorithm produced `raw_input`
@@ -400,6 +442,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                     algorithm = algorithm,
                     confidence = "high",
                     reason = f"prefix `{prefix}` — {note}",
+                    hashcat_mode = HASHCAT_MODES.get(algorithm),
                 )
             ]
 
@@ -432,6 +475,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                     confidence = "high",
                     reason =
                     "user::domain:challenge:hmac(32 hex):blob shape",
+                    hashcat_mode = HASHCAT_MODES.get(algorithm),
                 )
             ]
         # NetNTLMv1 layout:
@@ -444,6 +488,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                     confidence = "high",
                     reason =
                     "user::domain:lm(48 hex):nt(48 hex):challenge shape",
+                    hashcat_mode = HASHCAT_MODES.get(algorithm),
                 )
             ]
 
@@ -455,6 +500,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                 confidence = "high",
                 reason =
                 "starts with `*` followed by 40 uppercase hex chars",
+                hashcat_mode = HASHCAT_MODES.get(algorithm),
             )
         ]
 
@@ -468,6 +514,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                 confidence = "medium",
                 reason =
                 "13 chars in `./0-9A-Za-z` — legacy /etc/passwd format",
+                hashcat_mode = HASHCAT_MODES.get(algorithm),
             )
         ]
 
@@ -489,6 +536,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                     algorithm = algorithm,
                     confidence = confidence,
                     reason = f"{len(text)} hex chars — {label}",
+                    hashcat_mode = HASHCAT_MODES.get(algorithm),
                 )
             )
         return candidates
@@ -523,6 +571,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                         confidence = "low",
                         reason =
                         f"`${algo_name}$...` shape — generic PHC, no specific rule",
+                        hashcat_mode = HASHCAT_MODES.get(algorithm),
                     )
                 ]
 
@@ -545,6 +594,22 @@ def identify(raw_input: str) -> list[HashCandidate]:
                 "leading `eyJ` is base64 of `{\"` — JWT, not a hash",
             )
         ]
+    if text.startswith("http://") or text.startswith("https://"):
+        return [
+            HashCandidate(
+                algorithm = "URL (not a hash)",
+                confidence= "low",
+                reason = "starts with http(s)://"
+            )
+        ]
+    if text.startswith("0x"):
+        return [
+            HashCandidate(
+                algorithm = "Simple hex (not a hash)",
+                confidence= "low",
+                reason = "starts with 0x prefix"
+            )
+        ]
     if any(c in text for c in "+/=") and len(text) > 8:
         # Hex hashes NEVER contain `+`, `/`, or `=`. If our input
         # does, it is almost certainly base64-encoded data of some
@@ -557,6 +622,24 @@ def identify(raw_input: str) -> list[HashCandidate]:
                 reason = "contains base64-only chars (`+`, `/`, `=`)",
             )
         ]
+    if all(c in BASE32_CHARS for c in text):
+        return [
+            HashCandidate(
+                algorithm = "Base32 blob (not a hash)",
+                confidence= "low",
+                reason = "contains base32 only chars (only uppsercase letters and digits 2-7)"
+            )
+        ]
+    if all(c in BASE58_CHARS for c in text):
+        return [
+            HashCandidate(
+                algorithm = "Base58 blob (not a hash)",
+                confidence= "low",
+                reason = "contains base58 only chars"
+            )
+        ]
+    
+        
 
     # ----- Step 6: nothing matched -----
     # If we got here, the input has no known prefix, no special
@@ -631,6 +714,7 @@ def _render_table(
     table.add_column("algorithm", style = "bold white", no_wrap = True)
     table.add_column("confidence", no_wrap = True)
     table.add_column("reason", style = "dim")
+    table.add_column("hashcat mode")
 
     # Color confidence levels so the eye can scan them quickly.
     # green → yellow → cyan is a gradient that reads "strong, weaker,
@@ -650,6 +734,7 @@ def _render_table(
             candidate.algorithm,
             f"[{color}]{candidate.confidence}[/{color}]",
             candidate.reason,
+            f"{candidate.hashcat_mode}" if HASHCAT_MODES.get(candidate.algorithm) is not None else "Unknown",
         )
     console.print(table)
 
@@ -720,9 +805,9 @@ def main() -> int:
                 )
             else:
                 _render_table(res["hash"], res["candidates"], console)
-                if res["candidates"][0].confidence == "high":
+                if res["candidates"][0].hashcat_mode is not None:
                     console.print(
-                        "\n[dim]Next step: try the matching cracker mode "
+                        f"\n[dim]Next step: try the matching cracker mode: hashcat -m {res["candidates"][0].hashcat_mode} -a 0 '{res["hash"]}' wrodlist.txt"
                         "(see ../../beginner/hash-cracker).[/dim]"
                     )
         else:
@@ -734,6 +819,11 @@ def main() -> int:
                 for candidate in res["candidates"]:
                     print(f"  Algorithm: {candidate.algorithm}, Confidence: {candidate.confidence}, Reason: {candidate.reason}")
                 print()
+                if len(res["candidates"]) > 0 and res["candidates"][0].hashcat_mode is not None:
+                    console.print(
+                        f"\n[dim]Next step: try the matching cracker mode: hashcat -m {res['candidates'][0].hashcat_mode} -a 0 '{res['hash']}' wordlist.txt \n"
+                        "(see ../../beginner/hash-cracker).[/dim]"
+                    )
 
     return exit_code
 

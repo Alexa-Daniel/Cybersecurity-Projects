@@ -1,0 +1,20 @@
+# --- URLs (Should flag as URL) ---
+https://github.com/CarterPerez-dev/Cybersecurity-Projects
+http://127.0.0.1:8000/admin-login
+
+# --- 0x Hex Prefix (Should flag as Hex String / Memory Address) ---
+0x71C7656EC7ab88b098defB751B7401B5f6d8976F
+0x0000000000400000
+
+# --- Base58 (Should flag as Base58 blob) ---
+1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG
+StV1cqzsNhx2b35M5w
+
+# --- Base32 (Should flag as Base32 blob) ---
+JBSWY3DPEHPK3PXP
+GEZDGNBVGY3TQOJQ
+NVSGQ2C7N5ZWG2LOMNQXE43BM5SGOIJB
+
+# --- Sanity Check: Real MD5 (Should STILL flag as MD5, not Base58/Base32!) ---
+8743b52063cd84097a65d1633f5c74f5
