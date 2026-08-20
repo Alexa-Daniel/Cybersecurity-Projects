@@ -275,6 +275,8 @@ HEX_LENGTH_RULES: dict[int, list[str]] = {
 
 BASE58_CHARS = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 BASE32_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+BASE64_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+USERNAME_CHARS = set("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
 # =============================================================================
@@ -649,6 +651,36 @@ def identify(raw_input: str) -> list[HashCandidate]:
     # clean "could not identify" message instead
     return []
 
+# =============================================================================
+# split() - identifies what each field of the string represents
+# =============================================================================
+
+def split(text: str) -> list[tuple[str, str]]:
+    already_completed = {
+        "username": 0,
+        "hash": 0,
+        "salt": 0,
+    }
+    split_results = []
+    fields = text.split(":")
+    for index, field in enumerate(fields):
+        candidates = identify(field)
+        if already_completed["hash"] == 0 and len(candidates) >= 1 and not "not a hash" in candidates[0].algorithm:
+            split_results.append(("hash", field))
+            already_completed["hash"] = 1
+        elif already_completed["salt"] == 0 and (all(c in BASE64_CHARS for c in field) 
+                and (len(field) == 22 or len(field) == 24)) or (all(c in HEX_CHARSET for c in field) and len(field) == 32):
+            split_results.append(("salt", field))
+            already_completed["salt"] = 1
+        elif already_completed["username"] == 0 and all(c in USERNAME_CHARS for c in field):
+            split_results.append(("username", field))
+            already_completed["username"] = 1
+        else:
+            split_results.append(("garbage", field))
+    
+    return split_results
+            
+   
 
 # =============================================================================
 # CLI — argparse + a rich table
@@ -692,7 +724,27 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         type = Path,
         help = "The path of the file which will have its hashes identified",
     )
+    parser.add_argument(
+        "--split",
+        type = str,
+        help = "Takes a string such as: 'username:hash:salt' and returns a table identifying which field is which (since they can be in whatever order)",
+    )
     return parser
+
+def _render_split_table(
+    raw_input: str,
+    split_results: list[tuple[str, str]],
+    console: Console,
+) -> None:
+    table = Table(
+        title = f"Classification of: {raw_input.strip()} fields",
+    )
+    for result in split_results:
+        table.add_column(result[0])
+    table.add_row(split_results[0][1], split_results[1][1], split_results[2][1])
+    
+    console.print(table)
+        
 
 
 def _render_table(
@@ -756,6 +808,8 @@ def main() -> int:
 
     if args.hash is not None:
         raw_lines = [args.hash]
+    elif args.split is not None:
+        raw_lines = [args.split]
     elif args.file is not None:
         raw_lines = args.file.read_text().splitlines()
     elif not sys.stdin.isatty():
@@ -771,59 +825,66 @@ def main() -> int:
 
     results = []
     
-    for raw_hash in lines:
-        candidates = identify(raw_hash)
-        trimmed = candidates[: args.top]
-        results.append({
-            "hash": raw_hash,
-            "candidates": trimmed,
-            "dict_candidates": [asdict(c) for c in trimmed] # Pre-build JSON format
-        })
-
-    # Track exit code (if a single hash was queried but found nothing, return 1)
-    exit_code = 1 if (len(results) == 1 and not results[0]["candidates"]) else 0
-
-    if args.json:
-        # Build the exact JSON structure we want
-        json_data = [{"hash": r["hash"], "candidates": r["dict_candidates"]} for r in results]
-        
-        # If it's a single item, unwrap it from the list so the JSON looks cleaner
-        if len(json_data) == 1:
-            console.print_json(data=json_data[0], indent=2)
-        else:
-            console.print_json(data=json_data, indent=2)
-
+    if args.split is not None:
+        for line in lines:
+            split_result = split(line)
+            _render_split_table(line, split_result, console)
+        exit_code = 1
     else:
-        if len(results) == 1:
-            # Single-item -> rich table
-            res = results[0]
-            if not res["candidates"]:
-                console.print(
-                    "[red]No identification possible.[/red] "
-                    "Input did not match any known prefix, special format, "
-                    "or hex length."
-                )
+        
+        for raw_hash in lines:
+            candidates = identify(raw_hash)
+            trimmed = candidates[: args.top]
+            results.append({
+                "hash": raw_hash,
+                "candidates": trimmed,
+                "dict_candidates": [asdict(c) for c in trimmed] # Pre-build JSON format
+            })
+
+        # Track exit code (if a single hash was queried but found nothing, return 1)
+        exit_code = 1 if (len(results) == 1 and not results[0]["candidates"]) else 0
+
+        if args.json:
+            # Build the exact JSON structure we want
+            json_data = [{"hash": r["hash"], "candidates": r["dict_candidates"]} for r in results]
+            
+            # If it's a single item, unwrap it from the list so the JSON looks cleaner
+            if len(json_data) == 1:
+                console.print_json(data=json_data[0], indent=2)
             else:
-                _render_table(res["hash"], res["candidates"], console)
-                if res["candidates"][0].hashcat_mode is not None:
-                    console.print(
-                        f"\n[dim]Next step: try the matching cracker mode: hashcat -m {res["candidates"][0].hashcat_mode} -a 0 '{res["hash"]}' wrodlist.txt"
-                        "(see ../../beginner/hash-cracker).[/dim]"
-                    )
+                console.print_json(data=json_data, indent=2)
+
         else:
-            # Multi-item -> textual representation
-            for res in results:
-                print(f"{res['hash']}:")
+            if len(results) == 1:
+                # Single-item -> rich table
+                res = results[0]
                 if not res["candidates"]:
-                    print("  No identification possible.")
-                for candidate in res["candidates"]:
-                    print(f"  Algorithm: {candidate.algorithm}, Confidence: {candidate.confidence}, Reason: {candidate.reason}")
-                print()
-                if len(res["candidates"]) > 0 and res["candidates"][0].hashcat_mode is not None:
                     console.print(
-                        f"\n[dim]Next step: try the matching cracker mode: hashcat -m {res['candidates'][0].hashcat_mode} -a 0 '{res['hash']}' wordlist.txt \n"
-                        "(see ../../beginner/hash-cracker).[/dim]"
+                        "[red]No identification possible.[/red] "
+                        "Input did not match any known prefix, special format, "
+                        "or hex length."
                     )
+                else:
+                    _render_table(res["hash"], res["candidates"], console)
+                    if res["candidates"][0].hashcat_mode is not None:
+                        console.print(
+                            f"\n[dim]Next step: try the matching cracker mode: hashcat -m {res["candidates"][0].hashcat_mode} -a 0 '{res["hash"]}' wrodlist.txt"
+                            "(see ../../beginner/hash-cracker).[/dim]"
+                        )
+            else:
+                # Multi-item -> textual representation
+                for res in results:
+                    print(f"{res['hash']}:")
+                    if not res["candidates"]:
+                        print("  No identification possible.")
+                    for candidate in res["candidates"]:
+                        print(f"  Algorithm: {candidate.algorithm}, Confidence: {candidate.confidence}, Reason: {candidate.reason}")
+                    print()
+                    if len(res["candidates"]) > 0 and res["candidates"][0].hashcat_mode is not None:
+                        console.print(
+                            f"\n[dim]Next step: try the matching cracker mode: hashcat -m {res['candidates'][0].hashcat_mode} -a 0 '{res['hash']}' wordlist.txt \n"
+                            "(see ../../beginner/hash-cracker).[/dim]"
+                        )
 
     return exit_code
 
