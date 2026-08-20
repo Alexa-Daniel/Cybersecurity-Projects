@@ -80,14 +80,19 @@ from rich.console import Console
 from rich.table import Table
 
 # =============================================================================
-# Confidence type — only three valid values
+# Confidence score - floating number between 0 and 1
 # =============================================================================
-# Literal["high", "medium", "low"] is a type hint that says "this string
-# can ONLY be one of these three values." Mypy will catch typos like
-# "hgih" at edit time. We chose Literal over an Enum because I
-# prefer Literals for small fixed sets
+# Score will be determined using different weights based on the match
+# and some added score from different smaller hints:
+# Scoring:
+# prefix match: 0.95
+# special shape match: 0.85
+# length match (1st candidate): 0.55
+# length match (Nth candidate): 0.55 / N
+# charset match: small additive bonus
+# not-a-hash hint: 0.30
 
-Confidence = Literal["high", "medium", "low"]
+confidence_score: float
 
 
 # =============================================================================
@@ -119,7 +124,7 @@ class HashCandidate:
         The numerical mode value that hashcat takes for this specific algorithm
     """
     algorithm: str
-    confidence: Confidence
+    confidence: float
     reason: str
     hashcat_mode: int | None = None
     
@@ -439,10 +444,11 @@ def identify(raw_input: str) -> list[HashCandidate]:
     # produced it, we are not guessing
     for prefix, algorithm, note in PREFIX_RULES:
         if text.startswith(prefix):
+            confidence_score = 0.95
             return [
                 HashCandidate(
                     algorithm = algorithm,
-                    confidence = "high",
+                    confidence = confidence_score,
                     reason = f"prefix `{prefix}` — {note}",
                     hashcat_mode = HASHCAT_MODES.get(algorithm),
                 )
@@ -471,10 +477,11 @@ def identify(raw_input: str) -> list[HashCandidate]:
         # The hmac at parts[4] is exactly 32 hex chars — that single
         # property is enough to disambiguate v2 from v1
         if (len(parts) >= 6 and len(parts[4]) == 32 and _is_hex(parts[4])):
+            confidence_score = 0.85
             return [
                 HashCandidate(
                     algorithm = "NetNTLMv2",
-                    confidence = "high",
+                    confidence = confidence_score,
                     reason =
                     "user::domain:challenge:hmac(32 hex):blob shape",
                     hashcat_mode = HASHCAT_MODES.get(algorithm),
@@ -484,10 +491,11 @@ def identify(raw_input: str) -> list[HashCandidate]:
         #   user :: domain : lmhash(48 hex) : nthash(48 hex) : challenge
         # The lmhash at parts[3] is exactly 48 hex chars
         if (len(parts) >= 6 and len(parts[3]) == 48 and _is_hex(parts[3])):
+            confidence_score = 0.85
             return [
                 HashCandidate(
                     algorithm = "NetNTLMv1",
-                    confidence = "high",
+                    confidence = confidence_score,
                     reason =
                     "user::domain:lm(48 hex):nt(48 hex):challenge shape",
                     hashcat_mode = HASHCAT_MODES.get(algorithm),
@@ -496,10 +504,11 @@ def identify(raw_input: str) -> list[HashCandidate]:
 
     # MySQL5 — literal `*` + 40 uppercase hex chars
     if _is_mysql5(text):
+        confidence_score = 0.85
         return [
             HashCandidate(
                 algorithm = "MySQL5",
-                confidence = "high",
+                confidence = confidence_score,
                 reason =
                 "starts with `*` followed by 40 uppercase hex chars",
                 hashcat_mode = HASHCAT_MODES.get(algorithm),
@@ -510,10 +519,11 @@ def identify(raw_input: str) -> list[HashCandidate]:
     # with no prefix at all. We report MEDIUM (not HIGH) because the
     # 13-char `./0-9A-Za-z` shape isn't fully unique to DES crypt
     if _is_descrypt(text):
+        confidence_score = 0.85
         return [
             HashCandidate(
                 algorithm = "DES crypt",
-                confidence = "medium",
+                confidence = confidence_score,
                 reason =
                 "13 chars in `./0-9A-Za-z` — legacy /etc/passwd format",
                 hashcat_mode = HASHCAT_MODES.get(algorithm),
@@ -528,7 +538,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
             # The first listed algorithm for each length is the modern
             # default and gets MEDIUM confidence. The rest are still
             # possible but less common in 2026 — LOW confidence
-            confidence: Confidence = "medium" if index == 0 else "low"
+            confidence_score = 0.55 / (index + 1) 
             label = (
                 "most likely candidate at this length"
                 if index == 0 else "also possible at this length"
@@ -536,7 +546,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
             candidates.append(
                 HashCandidate(
                     algorithm = algorithm,
-                    confidence = confidence,
+                    confidence = confidence_score,
                     reason = f"{len(text)} hex chars — {label}",
                     hashcat_mode = HASHCAT_MODES.get(algorithm),
                 )
@@ -567,10 +577,11 @@ def identify(raw_input: str) -> list[HashCandidate]:
             # string and we'd rather stay silent than make up a name
             if algo_name and all(c.isalnum() or c in "-_"
                                  for c in algo_name):
+                confidence_score = 0.4
                 return [
                     HashCandidate(
                         algorithm = f"PHC string ({algo_name})",
-                        confidence = "low",
+                        confidence = confidence_score,
                         reason =
                         f"`${algo_name}$...` shape — generic PHC, no specific rule",
                         hashcat_mode = HASHCAT_MODES.get(algorithm),
@@ -584,6 +595,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
     # confidence is more educational than a silent no-match: the
     # user finds out WHAT they pasted and that this tool is not
     # going to crack it for them
+    confidence_score = 0.3
     if text.startswith("eyJ"):
         # JWTs always begin with `eyJ` because their JSON header
         # `{"alg":...}` base64-encodes to a string starting with
@@ -591,7 +603,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
         return [
             HashCandidate(
                 algorithm = "JWT (not a hash)",
-                confidence = "low",
+                confidence = confidence_score,
                 reason =
                 "leading `eyJ` is base64 of `{\"` — JWT, not a hash",
             )
@@ -600,7 +612,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
         return [
             HashCandidate(
                 algorithm = "URL (not a hash)",
-                confidence= "low",
+                confidence= confidence_score,
                 reason = "starts with http(s)://"
             )
         ]
@@ -608,7 +620,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
         return [
             HashCandidate(
                 algorithm = "Simple hex (not a hash)",
-                confidence= "low",
+                confidence= confidence_score,
                 reason = "starts with 0x prefix"
             )
         ]
@@ -620,7 +632,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
         return [
             HashCandidate(
                 algorithm = "Base64 blob (not a hash)",
-                confidence = "low",
+                confidence = confidence_score,
                 reason = "contains base64-only chars (`+`, `/`, `=`)",
             )
         ]
@@ -628,7 +640,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
         return [
             HashCandidate(
                 algorithm = "Base32 blob (not a hash)",
-                confidence= "low",
+                confidence= confidence_score,
                 reason = "contains base32 only chars (only uppsercase letters and digits 2-7)"
             )
         ]
@@ -636,7 +648,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
         return [
             HashCandidate(
                 algorithm = "Base58 blob (not a hash)",
-                confidence= "low",
+                confidence= confidence_score,
                 reason = "contains base58 only chars"
             )
         ]
@@ -774,14 +786,13 @@ def _render_table(
     # the no-match error message printed elsewhere in main(). Painting
     # "low" in red would make three weak-but-valid guesses look like
     # three errors at a glance — broken visual hierarchy
-    confidence_colors: dict[Confidence,
-                            str] = {
-                                "high": "green",
-                                "medium": "yellow",
-                                "low": "cyan",
-                            }
     for candidate in candidates:
-        color = confidence_colors[candidate.confidence]
+        if candidate.confidence > 0.8:
+            color = "green"
+        elif candidate.confidence > 0.5 and candidate.confidence < 0.8:
+            color = "yellow"
+        else:
+            color = "cyan"
         table.add_row(
             candidate.algorithm,
             f"[{color}]{candidate.confidence}[/{color}]",
