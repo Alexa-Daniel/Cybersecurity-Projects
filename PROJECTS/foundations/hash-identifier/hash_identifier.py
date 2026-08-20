@@ -94,6 +94,8 @@ from rich.table import Table
 
 confidence_score: float
 
+CRACK_DIFFICULTY = Literal["trivial", "moderate", "hard", "very_hard"]
+
 
 # =============================================================================
 # Result type — what identify() returns for each guess
@@ -126,6 +128,7 @@ class HashCandidate:
     algorithm: str
     confidence: float
     reason: str
+    crack_difficulty: CRACK_DIFFICULTY
     hashcat_mode: int | None = None
     
 # =============================================================================
@@ -161,6 +164,74 @@ HASHCAT_MODES: dict[str, int] = {
     "scrypt": 8900,
     "phpass": 400,
     "Drupal 7 (SHA-512)": 7900
+}
+
+DIFFICULTY_MAP: dict[str, CRACK_DIFFICULTY] = {
+    # ---------------------------------------------------------
+    # TRIVIAL (Fast, Unsalted, or Broken)
+    # ---------------------------------------------------------
+    "MD4": "trivial",
+    "MD5": "trivial",
+    "SHA1": "trivial",
+    "SHA-1": "trivial",
+    "NTLM": "trivial",
+    "MySQL323": "trivial",
+    "CRC-64": "trivial",
+    "NetNTLMv1": "trivial",      # Easily downgraded/broken via DES
+    "LDAP MD5": "trivial",
+    "LDAP SHA": "trivial",
+    "RIPEMD-128": "trivial",
+
+    # ---------------------------------------------------------
+    # MODERATE (Salted fast hashes, or slower raw algorithms)
+    # ---------------------------------------------------------
+    "SHA-224": "moderate",
+    "SHA-256": "moderate",
+    "SHA-384": "moderate",
+    "SHA-512": "moderate",
+    "SHA3-224": "moderate",
+    "SHA3-256": "moderate",
+    "SHA3-384": "moderate",
+    "SHA3-512": "moderate",
+    "BLAKE2s-256": "moderate",
+    "BLAKE2b-512": "moderate",
+    "RIPEMD-160": "moderate",
+    "RIPEMD-256": "moderate",
+    "RIPEMD-320": "moderate",
+    "Tiger-128": "moderate",
+    "Tiger-192": "moderate",
+    "Whirlpool": "moderate",
+    "MySQL5": "moderate",        # SHA1(SHA1(pass))
+    "DES crypt": "moderate",     # Salted, but limited to 8 chars max
+    "NetNTLMv2": "moderate",     # HMAC-MD5 based challenge-response
+    "LDAP SMD5": "moderate",     # Salted MD5
+    "LDAP SSHA": "moderate",     # Salted SHA-1
+
+    # ---------------------------------------------------------
+    # HARD (Iterated KDFs - Slows down GPUs significantly)
+    # ---------------------------------------------------------
+    "MD5 crypt": "hard",         # 1000 iterations of MD5
+    "Apache MD5-crypt": "hard",  
+    "SHA-256 crypt": "hard",     # 5000 iterations of SHA-256
+    "SHA-512 crypt": "hard",     # 5000 iterations of SHA-512
+    "phpass": "hard",            # ~8192 iterations of MD5 (WordPress)
+    "Drupal 7 (SHA-512)": "hard",
+    "Django PBKDF2-SHA1": "hard",
+    "Django PBKDF2-SHA256": "hard",
+    "macOS / iCloud Keychain": "hard", # Apple PBKDF2-SHA512
+    "LDAP CRYPT": "hard",
+
+    # ---------------------------------------------------------
+    # VERY HARD (Memory-Hard / ASIC-Resistant / GPU-Resistant)
+    # ---------------------------------------------------------
+    "bcrypt": "very_hard",
+    "scrypt": "very_hard",
+    "Argon2id": "very_hard",
+    "Argon2i": "very_hard",
+    "Argon2d": "very_hard",
+    "yescrypt": "very_hard",     # Modern memory-hard Linux default
+    "Django bcrypt-SHA256": "very_hard",
+    "Django Argon2": "very_hard",
 }
 
 
@@ -433,6 +504,8 @@ def identify(raw_input: str) -> list[HashCandidate]:
 
     if not text:
         return []
+    
+    
 
     # ----- Step 1: prefix rules -----
     # Walk the table top-to-bottom. Entries in PREFIX_RULES are crafted
@@ -451,6 +524,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                     confidence = confidence_score,
                     reason = f"prefix `{prefix}` — {note}",
                     hashcat_mode = HASHCAT_MODES.get(algorithm),
+                    crack_difficulty = DIFFICULTY_MAP[algorithm],
                 )
             ]
 
@@ -485,6 +559,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                     reason =
                     "user::domain:challenge:hmac(32 hex):blob shape",
                     hashcat_mode = HASHCAT_MODES.get(algorithm),
+                    crack_difficulty = DIFFICULTY_MAP[algorithm],
                 )
             ]
         # NetNTLMv1 layout:
@@ -499,6 +574,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                     reason =
                     "user::domain:lm(48 hex):nt(48 hex):challenge shape",
                     hashcat_mode = HASHCAT_MODES.get(algorithm),
+                    crack_difficulty = DIFFICULTY_MAP[algorithm],
                 )
             ]
 
@@ -512,6 +588,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                 reason =
                 "starts with `*` followed by 40 uppercase hex chars",
                 hashcat_mode = HASHCAT_MODES.get(algorithm),
+                crack_difficulty = DIFFICULTY_MAP[algorithm],
             )
         ]
 
@@ -527,6 +604,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                 reason =
                 "13 chars in `./0-9A-Za-z` — legacy /etc/passwd format",
                 hashcat_mode = HASHCAT_MODES.get(algorithm),
+                crack_difficulty = DIFFICULTY_MAP[algorithm],
             )
         ]
 
@@ -549,6 +627,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                     confidence = confidence_score,
                     reason = f"{len(text)} hex chars — {label}",
                     hashcat_mode = HASHCAT_MODES.get(algorithm),
+                    crack_difficulty = DIFFICULTY_MAP[algorithm],
                 )
             )
         return candidates
@@ -585,6 +664,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                         reason =
                         f"`${algo_name}$...` shape — generic PHC, no specific rule",
                         hashcat_mode = HASHCAT_MODES.get(algorithm),
+                        crack_difficulty = DIFFICULTY_MAP[algorithm],
                     )
                 ]
 
@@ -606,6 +686,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                 confidence = confidence_score,
                 reason =
                 "leading `eyJ` is base64 of `{\"` — JWT, not a hash",
+                crack_difficulty = DIFFICULTY_MAP.get(algorithm, "trivial"),
             )
         ]
     if text.startswith("http://") or text.startswith("https://"):
@@ -613,7 +694,8 @@ def identify(raw_input: str) -> list[HashCandidate]:
             HashCandidate(
                 algorithm = "URL (not a hash)",
                 confidence= confidence_score,
-                reason = "starts with http(s)://"
+                reason = "starts with http(s)://",
+                crack_difficulty = DIFFICULTY_MAP.get(algorithm, "trivial"),
             )
         ]
     if text.startswith("0x"):
@@ -621,7 +703,8 @@ def identify(raw_input: str) -> list[HashCandidate]:
             HashCandidate(
                 algorithm = "Simple hex (not a hash)",
                 confidence= confidence_score,
-                reason = "starts with 0x prefix"
+                reason = "starts with 0x prefix",
+                crack_difficulty = DIFFICULTY_MAP.get(algorithm, "trivial"),
             )
         ]
     if any(c in text for c in "+/=") and len(text) > 8:
@@ -634,6 +717,7 @@ def identify(raw_input: str) -> list[HashCandidate]:
                 algorithm = "Base64 blob (not a hash)",
                 confidence = confidence_score,
                 reason = "contains base64-only chars (`+`, `/`, `=`)",
+                crack_difficulty = DIFFICULTY_MAP.get(algorithm, "trivial"),
             )
         ]
     if all(c in BASE32_CHARS for c in text):
@@ -641,7 +725,8 @@ def identify(raw_input: str) -> list[HashCandidate]:
             HashCandidate(
                 algorithm = "Base32 blob (not a hash)",
                 confidence= confidence_score,
-                reason = "contains base32 only chars (only uppsercase letters and digits 2-7)"
+                reason = "contains base32 only chars (only uppsercase letters and digits 2-7)",
+                crack_difficulty = DIFFICULTY_MAP.get(algorithm, "trivial"),
             )
         ]
     if all(c in BASE58_CHARS for c in text):
@@ -649,7 +734,8 @@ def identify(raw_input: str) -> list[HashCandidate]:
             HashCandidate(
                 algorithm = "Base58 blob (not a hash)",
                 confidence= confidence_score,
-                reason = "contains base58 only chars"
+                reason = "contains base58 only chars",
+                crack_difficulty = DIFFICULTY_MAP.get(algorithm, "trivial"),
             )
         ]
     
@@ -779,6 +865,7 @@ def _render_table(
     table.add_column("confidence", no_wrap = True)
     table.add_column("reason", style = "dim")
     table.add_column("hashcat mode")
+    table.add_column("crack difficulty")
 
     # Color confidence levels so the eye can scan them quickly.
     # green → yellow → cyan is a gradient that reads "strong, weaker,
@@ -798,6 +885,8 @@ def _render_table(
             f"[{color}]{candidate.confidence}[/{color}]",
             candidate.reason,
             f"{candidate.hashcat_mode}" if HASHCAT_MODES.get(candidate.algorithm) is not None else "Unknown",
+            candidate.crack_difficulty,
+            
         )
     console.print(table)
 
@@ -879,7 +968,7 @@ def main() -> int:
                     _render_table(res["hash"], res["candidates"], console)
                     if res["candidates"][0].hashcat_mode is not None:
                         console.print(
-                            f"\n[dim]Next step: try the matching cracker mode: hashcat -m {res["candidates"][0].hashcat_mode} -a 0 '{res["hash"]}' wrodlist.txt"
+                            f"\n[dim]Next step: try the matching cracker mode: hashcat -m {res["candidates"][0].hashcat_mode} -a 0 '{res["hash"]}' wordlist.txt"
                             "(see ../../beginner/hash-cracker).[/dim]"
                         )
             else:
